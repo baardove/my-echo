@@ -1,6 +1,51 @@
 # My Echo — Native macOS Hi-Fi Music, Podcast & FiiO DAP Sync Studio
 
-**My Echo** is a native Swift 6 / SwiftUI macOS application built for audiophiles and portable Digital Audio Player (DAP) owners. It combines a Spotify-familiar library browser, a 90s neon retro aesthetic (with 4 live-switchable hardware-inspired themes), a floating **Winamp-style Mini Player**, multi-directory podcast discovery & auto-rotating downloads, and a zero-dependency FiiO-aware sync engine that maintains strict `ARTIST/ALBUM/TRACK` storage structures on SD cards and audio players.
+**My Echo** is a native Swift 6 / SwiftUI macOS application built for audiophiles and portable Digital Audio Player (DAP) owners. It combines a Spotify-familiar library browser, a 90s neon retro aesthetic (with 5 live-switchable hardware-inspired & frosted glass themes), a floating **Winamp-style Mini Player**, multi-directory podcast discovery & auto-rotating downloads, and a zero-dependency FiiO-aware sync engine that maintains strict `ARTIST/ALBUM/TRACK` storage structures on SD cards and audio players.
+
+---
+
+## Screenshots
+
+### Albums Grid · Echo Cassette Theme & Multi-Destination Sidebar
+![My Echo Albums Grid](docs/screenshots/albums-echo-cassette.jpg)
+
+### Album Detail · Dynamic Artwork Glow, `ARTIST/ALBUM/TRACK` Path Preview & Playback Bar
+![My Echo Album Detail — Abbey Road](docs/screenshots/album-detail-abbey-road.jpg)
+
+### Floating Winamp-Style Mini Player (`⌘⇧M`) · Live 16-Band Spectrum & Resizable `PL` Drawer
+<p align="center">
+  <img src="docs/screenshots/mini-player-winamp.png" alt="My Echo Winamp Mini Player" width="420" />
+</p>
+
+---
+
+## Releases & Download
+
+Prebuilt macOS (Apple Silicon) `.app` bundles are published on the [**GitHub Releases**](https://github.com/baardove/my-echo/releases) page.
+
+### Latest Release — [`v1.2.0`](https://github.com/baardove/my-echo/releases/tag/v1.2.0)
+
+- **Download:** [`My-Echo-v1.2.0-macOS-arm64.zip`](https://github.com/baardove/my-echo/releases/download/v1.2.0/My-Echo-v1.2.0-macOS-arm64.zip) (2.8 MB, macOS 14+ Apple Silicon)
+- **SHA-256 Checksum:** [`My-Echo-v1.2.0-macOS-arm64.zip.sha256`](https://github.com/baardove/my-echo/releases/download/v1.2.0/My-Echo-v1.2.0-macOS-arm64.zip.sha256)
+  ```text
+  354ddb31be91477d91519b1a6254158893b13acf2e8a8c1c4ddfb7386015af4b  My-Echo-v1.2.0-macOS-arm64.zip
+  ```
+
+#### Quick Install
+1. Download and unzip `My-Echo-v1.2.0-macOS-arm64.zip`.
+2. Drag **`My Echo.app`** into `/Applications`.
+3. Verify checksum (optional):
+   ```bash
+   shasum -a 256 -c My-Echo-v1.2.0-macOS-arm64.zip.sha256
+   ```
+4. Because GitHub releases are ad-hoc signed (not notarized with a paid Apple Developer ID), if macOS Gatekeeper warns on first open, clear the quarantine attribute once:
+   ```bash
+   xattr -cr "/Applications/My Echo.app"
+   ```
+   *(Or build locally from source in ~20 seconds with `./build-app.sh`.)*
+
+#### Release History
+- **[`v1.2.0`](https://github.com/baardove/my-echo/releases/tag/v1.2.0)** — Initial public macOS release: multi-source local & NAS indexing, pure-Swift metadata/artwork optimizer (`ARTIST/ALBUM/TRACK` + Baseline RGB JPEG + ID3v2.3 + `.lrc` + `._*` cleanup), **FiiO Echo / Nano / Disc / Android DAP / Generic** profiles, Single & Multi-Destination sync memory, drag-and-drop playlists, multi-directory podcasts with per-show episode rotation, freely height-resizable Winamp Mini Player, `diskutil` Clean & Eject, and 5 live themes (including **Frosted Glass**).
 
 ---
 
