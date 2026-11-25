@@ -13,7 +13,11 @@ public enum PathFormatter {
 
         for scalar in nfc.unicodeScalars {
             let v = scalar.value
-            if v < 0x20 || v == 0x7F { continue }
+            // Strip ASCII control characters & invisible Unicode format/BOM/zero-width characters
+            // (prevents duplicate phantom folders like "Alan Walker\u{FEFF}\u{FEFF}" on FAT32/exFAT)
+            if v < 0x20 || v == 0x7F || v == 0xFEFF || (v >= 0x200B && v <= 0x200F) || v == 0x2060 || (v >= 0x2028 && v <= 0x202F) {
+                continue
+            }
             switch scalar {
             case ":", "*", "?", "\"", "<", ">", "|", "/", "\\":
                 result.append("-")
@@ -40,8 +44,20 @@ public enum PathFormatter {
 
     /// Computes the canonical relative storage path in ARTIST/ALBUM/TRACK format,
     /// prefixed with the device profile's musicSubfolder (if non-empty).
-    public static func relativeTrackPath(for track: Track, profile: DeviceProfile) -> String {
-        let artistDir = sanitizeSegment(track.effectiveArtist, fallback: "Unknown Artist")
+    /// Pass `albumArtistOverride` (e.g. resolved `"Various Artists"` or album's majority artist)
+    /// so compilation and multi-artist albums stay together in ONE album folder on the device.
+    public static func relativeTrackPath(
+        for track: Track,
+        profile: DeviceProfile,
+        albumArtistOverride: String? = nil
+    ) -> String {
+        let rawArtist: String = {
+            if let override = albumArtistOverride?.trimmingCharacters(in: .whitespacesAndNewlines), !override.isEmpty {
+                return override
+            }
+            return track.effectiveArtist
+        }()
+        let artistDir = sanitizeSegment(rawArtist, fallback: "Unknown Artist")
         let albumDir = sanitizeSegment(track.effectiveAlbum, fallback: "Unknown Album")
 
         let trackTitle = sanitizeSegment(track.title, fallback: sanitizeSegment(URL(fileURLWithPath: track.fileName).deletingPathExtension().lastPathComponent, fallback: "Track"))

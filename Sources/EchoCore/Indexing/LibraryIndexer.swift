@@ -97,7 +97,7 @@ public actor LibraryIndexer {
                 ))
             }
 
-            if let vals = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
+            if let vals = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .addedToDirectoryDateKey, .creationDateKey]),
                let cached = existingByPath[url.path],
                let size = vals.fileSize,
                let mod = vals.contentModificationDate,
@@ -105,6 +105,9 @@ public actor LibraryIndexer {
                abs(mod.timeIntervalSince(cached.modifiedAt)) < 1.5 {
                 var refreshed = cached
                 refreshed.isAvailable = true
+                if refreshed.addedAt == nil {
+                    refreshed.addedAt = [vals.addedToDirectoryDate, vals.creationDate, mod].compactMap { $0 }.max()
+                }
                 resultTracks.append(refreshed)
                 unchanged += 1
                 continue

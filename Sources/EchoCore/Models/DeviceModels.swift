@@ -40,6 +40,11 @@ public enum DevicePresetKind: String, Codable, CaseIterable, Sendable, Hashable 
     case fiioDisc = "fiio_disc"
     case fiioAndroidDAP = "fiio_android_dap"
     case genericDAP = "generic_dap"
+    case iphoneWireless = "iphone_wireless"
+
+    public var isVirtualWireless: Bool {
+        self == .iphoneWireless
+    }
 
     public var displayName: String {
         switch self {
@@ -48,6 +53,7 @@ public enum DevicePresetKind: String, Codable, CaseIterable, Sendable, Hashable 
         case .fiioDisc: return "FiiO / Snowsky Disc"
         case .fiioAndroidDAP: return "FiiO Android DAP (M / JM Series)"
         case .genericDAP: return "Generic SD Card / Audio Player"
+        case .iphoneWireless: return "iPhone / iPad (My Echo iOS App)"
         }
     }
 
@@ -63,6 +69,8 @@ public enum DevicePresetKind: String, Codable, CaseIterable, Sendable, Hashable 
             return "exFAT/FAT32 · 1000px Baseline JPEG · / M3U8 · Wide format support"
         case .genericDAP:
             return "Relative / M3U8 · 800px Baseline JPEG · Clean macOS metadata"
+        case .iphoneWireless:
+            return "Virtual Wi-Fi Destination · Bonjour Auto-Sync · FLAC / ALAC / MP3 / M4A / WAV"
         }
     }
 }
@@ -147,7 +155,16 @@ public struct DeviceProfile: Identifiable, Codable, Hashable, Sendable {
     public var syncedTrackIDs: Set<String>
     public var syncedEpisodeIDs: Set<String>
 
+    /// Pairing PIN used by the standalone My Echo iOS app for virtual Wi-Fi sync destinations
+    public var wirelessSyncToken: String?
+    /// Last detected physical host connection (inside DAP vs USB card reader vs Mac built-in SD slot)
+    public var lastConnectionKind: VolumeConnectionKind?
+    public var lastConnectionDetail: String?
     public var lastSyncedAt: Date?
+
+    public var isVirtualWireless: Bool {
+        preset.isVirtualWireless
+    }
 
     public init(
         id: UUID = UUID(),
@@ -181,6 +198,9 @@ public struct DeviceProfile: Identifiable, Codable, Hashable, Sendable {
         podcastEpisodesPerShowLimit: Int = 5,
         syncedTrackIDs: Set<String> = [],
         syncedEpisodeIDs: Set<String> = [],
+        wirelessSyncToken: String? = nil,
+        lastConnectionKind: VolumeConnectionKind? = nil,
+        lastConnectionDetail: String? = nil,
         lastSyncedAt: Date? = nil
     ) {
         self.id = id
@@ -243,6 +263,16 @@ public struct DeviceProfile: Identifiable, Codable, Hashable, Sendable {
             self.stripMP3Comments = stripMP3Comments ?? false
             self.supportedFormats = supportedFormats ?? [.flac, .mp3, .wav, .m4a, .alac, .ogg, .aiff]
             self.maxTrackLimit = maxTrackLimit ?? nil
+        case .iphoneWireless:
+            self.musicSubfolder = musicSubfolder ?? "Music"
+            self.podcastsSubfolder = podcastsSubfolder ?? "Podcasts"
+            self.playlistsSubfolder = playlistsSubfolder ?? "Playlists"
+            self.playlistPathStyle = playlistPathStyle ?? .relativeForwardSlash
+            self.useM3U8Extension = useM3U8Extension ?? true
+            self.maxArtworkDimension = maxArtworkDimension ?? 1200
+            self.stripMP3Comments = stripMP3Comments ?? false
+            self.supportedFormats = supportedFormats ?? [.flac, .mp3, .m4a, .alac, .wav, .aiff]
+            self.maxTrackLimit = maxTrackLimit ?? nil
         }
 
         self.optimizeArtwork = optimizeArtwork
@@ -259,7 +289,14 @@ public struct DeviceProfile: Identifiable, Codable, Hashable, Sendable {
         self.podcastEpisodesPerShowLimit = podcastEpisodesPerShowLimit
         self.syncedTrackIDs = syncedTrackIDs
         self.syncedEpisodeIDs = syncedEpisodeIDs
+        self.wirelessSyncToken = wirelessSyncToken ?? (preset.isVirtualWireless ? Self.generatePairingPIN() : nil)
+        self.lastConnectionKind = lastConnectionKind
+        self.lastConnectionDetail = lastConnectionDetail
         self.lastSyncedAt = lastSyncedAt
+    }
+
+    public static func generatePairingPIN() -> String {
+        String(format: "%06d", Int.random(in: 100_000...999_999))
     }
 
     // Backwards-compatible Codable decoder so existing saved DeviceProfiles in SQLite migrate seamlessly!
@@ -296,6 +333,9 @@ public struct DeviceProfile: Identifiable, Codable, Hashable, Sendable {
         podcastEpisodesPerShowLimit = try c.decodeIfPresent(Int.self, forKey: .podcastEpisodesPerShowLimit) ?? 5
         syncedTrackIDs = try c.decodeIfPresent(Set<String>.self, forKey: .syncedTrackIDs) ?? []
         syncedEpisodeIDs = try c.decodeIfPresent(Set<String>.self, forKey: .syncedEpisodeIDs) ?? []
+        wirelessSyncToken = try c.decodeIfPresent(String.self, forKey: .wirelessSyncToken)
+        lastConnectionKind = try c.decodeIfPresent(VolumeConnectionKind.self, forKey: .lastConnectionKind)
+        lastConnectionDetail = try c.decodeIfPresent(String.self, forKey: .lastConnectionDetail)
         lastSyncedAt = try c.decodeIfPresent(Date.self, forKey: .lastSyncedAt)
     }
 
@@ -311,14 +351,60 @@ public struct DeviceProfile: Identifiable, Codable, Hashable, Sendable {
         self.stripMP3Comments = defaults.stripMP3Comments
         self.supportedFormats = defaults.supportedFormats
         self.maxTrackLimit = defaults.maxTrackLimit
+        if newPreset.isVirtualWireless && (self.wirelessSyncToken ?? "").isEmpty {
+            self.wirelessSyncToken = Self.generatePairingPIN()
+        }
     }
 
     public var isConnected: Bool {
-        !mountPath.isEmpty && FileManager.default.fileExists(atPath: mountPath)
+        if isVirtualWireless { return true }
+        return !mountPath.isEmpty && FileManager.default.fileExists(atPath: mountPath)
     }
 
     public func supports(_ format: AudioFormat) -> Bool {
         supportedFormats.contains(format)
+    }
+}
+
+public enum VolumeConnectionKind: String, Codable, Hashable, Sendable {
+    case inPlayer = "in_player"
+    case usbCardReader = "usb_card_reader"
+    case builtInCardReader = "builtin_card_reader"
+    case externalDrive = "external_drive"
+    case unknown = "unknown"
+
+    public var shortBadge: String {
+        switch self {
+        case .inPlayer: return "IN PLAYER"
+        case .usbCardReader: return "CARD READER"
+        case .builtInCardReader: return "MAC SD SLOT"
+        case .externalDrive: return "USB DRIVE"
+        case .unknown: return "STORAGE"
+        }
+    }
+
+    public var displayName: String {
+        switch self {
+        case .inPlayer: return "Connected Inside Player"
+        case .usbCardReader: return "USB Card Reader"
+        case .builtInCardReader: return "Mac Built-in SD Slot"
+        case .externalDrive: return "External USB Drive"
+        case .unknown: return "Removable Storage"
+        }
+    }
+
+    public var iconName: String {
+        switch self {
+        case .inPlayer: return "hifispeaker.fill"
+        case .usbCardReader: return "sdcard.fill"
+        case .builtInCardReader: return "laptopcomputer"
+        case .externalDrive: return "externaldrive.fill"
+        case .unknown: return "externaldrive"
+        }
+    }
+
+    public var isCardReader: Bool {
+        self == .usbCardReader || self == .builtInCardReader
     }
 }
 
@@ -332,9 +418,30 @@ public struct MountedVolumeInfo: Identifiable, Hashable, Sendable {
     public var isRemovable: Bool
     public var isExternal: Bool
     public var fileSystemType: String
+    public var connectionKind: VolumeConnectionKind
+    public var hardwareVendor: String?
+    public var hardwareProduct: String?
+    public var usbVendorID: Int?
+    public var usbProductID: Int?
+    public var usbLocationID: Int?
 
     public var usedBytes: Int64 {
         max(0, totalBytes - availableBytes)
+    }
+
+    public var connectionSummary: String {
+        var parts: [String] = [connectionKind.displayName]
+        if let v = hardwareVendor, !v.isEmpty {
+            parts.append(v)
+        }
+        if let p = hardwareProduct, !p.isEmpty,
+           p.caseInsensitiveCompare(hardwareVendor ?? "") != .orderedSame {
+            parts.append(p)
+        }
+        if let vid = usbVendorID, let pid = usbProductID {
+            parts.append(String(format: "%04X:%04X", vid, pid))
+        }
+        return parts.joined(separator: " · ")
     }
 
     public init(
@@ -345,7 +452,13 @@ public struct MountedVolumeInfo: Identifiable, Hashable, Sendable {
         availableBytes: Int64 = 0,
         isRemovable: Bool = true,
         isExternal: Bool = true,
-        fileSystemType: String = "FAT32"
+        fileSystemType: String = "FAT32",
+        connectionKind: VolumeConnectionKind = .unknown,
+        hardwareVendor: String? = nil,
+        hardwareProduct: String? = nil,
+        usbVendorID: Int? = nil,
+        usbProductID: Int? = nil,
+        usbLocationID: Int? = nil
     ) {
         self.name = name
         self.mountPath = mountPath
@@ -355,6 +468,12 @@ public struct MountedVolumeInfo: Identifiable, Hashable, Sendable {
         self.isRemovable = isRemovable
         self.isExternal = isExternal
         self.fileSystemType = fileSystemType
+        self.connectionKind = connectionKind
+        self.hardwareVendor = hardwareVendor
+        self.hardwareProduct = hardwareProduct
+        self.usbVendorID = usbVendorID
+        self.usbProductID = usbProductID
+        self.usbLocationID = usbLocationID
     }
 }
 

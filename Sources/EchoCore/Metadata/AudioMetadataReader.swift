@@ -36,6 +36,8 @@ public enum AudioMetadataReader {
         guard let attrs = try? fm.attributesOfItem(atPath: url.path) else { return nil }
         let fileSize = (attrs[.size] as? NSNumber)?.int64Value ?? 0
         let modifiedAt = (attrs[.modificationDate] as? Date) ?? Date()
+        let resourceVals = try? url.resourceValues(forKeys: [.addedToDirectoryDateKey, .creationDateKey])
+        let addedAt = [resourceVals?.addedToDirectoryDate, resourceVals?.creationDate, modifiedAt].compactMap { $0 }.max()
         let ext = url.pathExtension.lowercased()
         let format = AudioFormat(fileExtension: ext)
         guard format != .unknown else { return nil }
@@ -91,6 +93,7 @@ public enum AudioMetadataReader {
             fileName: url.lastPathComponent,
             fileSize: fileSize,
             modifiedAt: modifiedAt,
+            addedAt: addedAt,
             format: format,
             title: title,
             artist: artist,

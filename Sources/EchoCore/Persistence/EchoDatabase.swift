@@ -69,6 +69,26 @@ public final class EchoDatabase: @unchecked Sendable {
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS track_stats (
+                track_id TEXT PRIMARY KEY,
+                json TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS artist_stats (
+                artist_key TEXT PRIMARY KEY,
+                json TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS album_editorial (
+                album_key TEXT PRIMARY KEY,
+                json TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS artist_editorial (
+                artist_key TEXT PRIMARY KEY,
+                json TEXT NOT NULL
+            );
         """)
     }
 
@@ -216,6 +236,92 @@ public final class EchoDatabase: @unchecked Sendable {
     public func setSetting(_ key: String, value: String) {
         queue.sync {
             _ = runParamSQL("INSERT OR REPLACE INTO kv_settings (key, value) VALUES (?, ?);", params: [key, value])
+        }
+    }
+
+    // MARK: - Track & Artist Play/Popularity Stats
+
+    public func loadAllTrackStats() -> [String: TrackStats] {
+        queue.sync {
+            let rows = fetchJSONRows(sql: "SELECT json FROM track_stats;", type: TrackStats.self)
+            return Dictionary(uniqueKeysWithValues: rows.map { ($0.trackID, $0) })
+        }
+    }
+
+    public func saveTrackStats(_ stats: TrackStats) {
+        queue.sync {
+            guard let data = try? encoder.encode(stats),
+                  let jsonStr = String(data: data, encoding: .utf8) else { return }
+            _ = runParamSQL("INSERT OR REPLACE INTO track_stats (track_id, json) VALUES (?, ?);", params: [stats.trackID, jsonStr])
+        }
+    }
+
+    public func saveTrackStatsBatch(_ items: [TrackStats]) {
+        guard !items.isEmpty else { return }
+        queue.sync {
+            _ = execSimple("BEGIN TRANSACTION;")
+            let sql = "INSERT OR REPLACE INTO track_stats (track_id, json) VALUES (?, ?);"
+            var stmt: OpaquePointer?
+            if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+                for stats in items {
+                    guard let data = try? encoder.encode(stats),
+                          let jsonStr = String(data: data, encoding: .utf8) else { continue }
+                    sqlite3_reset(stmt)
+                    sqlite3_clear_bindings(stmt)
+                    sqlite3_bind_text(stmt, 1, stats.trackID, -1, SQLITE_TRANSIENT)
+                    sqlite3_bind_text(stmt, 2, jsonStr, -1, SQLITE_TRANSIENT)
+                    sqlite3_step(stmt)
+                }
+                sqlite3_finalize(stmt)
+            }
+            _ = execSimple("COMMIT;")
+        }
+    }
+
+    public func loadAllArtistStats() -> [String: ArtistOnlineStats] {
+        queue.sync {
+            let rows = fetchJSONRows(sql: "SELECT json FROM artist_stats;", type: ArtistOnlineStats.self)
+            return Dictionary(uniqueKeysWithValues: rows.map { ($0.artistKey, $0) })
+        }
+    }
+
+    public func saveArtistStats(_ stats: ArtistOnlineStats) {
+        queue.sync {
+            guard let data = try? encoder.encode(stats),
+                  let jsonStr = String(data: data, encoding: .utf8) else { return }
+            _ = runParamSQL("INSERT OR REPLACE INTO artist_stats (artist_key, json) VALUES (?, ?);", params: [stats.artistKey, jsonStr])
+        }
+    }
+
+    // MARK: - Local Editorial Cache (Album & Artist Info)
+
+    public func loadAllAlbumEditorial() -> [String: AlbumEditorialInfo] {
+        queue.sync {
+            let rows = fetchJSONRows(sql: "SELECT json FROM album_editorial;", type: AlbumEditorialInfo.self)
+            return Dictionary(uniqueKeysWithValues: rows.map { ($0.albumKey, $0) })
+        }
+    }
+
+    public func saveAlbumEditorial(_ info: AlbumEditorialInfo) {
+        queue.sync {
+            guard let data = try? encoder.encode(info),
+                  let jsonStr = String(data: data, encoding: .utf8) else { return }
+            _ = runParamSQL("INSERT OR REPLACE INTO album_editorial (album_key, json) VALUES (?, ?);", params: [info.albumKey, jsonStr])
+        }
+    }
+
+    public func loadAllArtistEditorial() -> [String: ArtistEditorialInfo] {
+        queue.sync {
+            let rows = fetchJSONRows(sql: "SELECT json FROM artist_editorial;", type: ArtistEditorialInfo.self)
+            return Dictionary(uniqueKeysWithValues: rows.map { ($0.artistKey, $0) })
+        }
+    }
+
+    public func saveArtistEditorial(_ info: ArtistEditorialInfo) {
+        queue.sync {
+            guard let data = try? encoder.encode(info),
+                  let jsonStr = String(data: data, encoding: .utf8) else { return }
+            _ = runParamSQL("INSERT OR REPLACE INTO artist_editorial (artist_key, json) VALUES (?, ?);", params: [info.artistKey, jsonStr])
         }
     }
 

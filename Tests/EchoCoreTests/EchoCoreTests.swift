@@ -660,6 +660,547 @@ final class EchoCoreTests: XCTestCase {
         d.append(contentsOf: [UInt8((v >> 24) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 8) & 0xFF), UInt8(v & 0xFF)])
     }
 
+    // MARK: - 2-Factor Format Labels, Play Counters & Online Popularity Tests
+
+    func testTwoFactorFormatLabels() {
+        let flac16 = Track(
+            id: "f1", sourceID: UUID(), filePath: "/m/1.flac", fileName: "1.flac",
+            fileSize: 1000, modifiedAt: Date(), format: .flac,
+            title: "T", artist: "A", albumArtist: "A", album: "AL",
+            sampleRate: 44_100, bitDepth: 16
+        )
+        XCTAssertEqual(flac16.formatPrimaryLabel, "FLAC")
+        XCTAssertEqual(flac16.formatDetailLabel, "16b/44.1kHz")
+
+        let flac24 = Track(
+            id: "f2", sourceID: UUID(), filePath: "/m/2.flac", fileName: "2.flac",
+            fileSize: 1000, modifiedAt: Date(), format: .flac,
+            title: "T", artist: "A", albumArtist: "A", album: "AL",
+            sampleRate: 96_000, bitDepth: 24
+        )
+        XCTAssertEqual(flac24.formatPrimaryLabel, "FLAC")
+        XCTAssertEqual(flac24.formatDetailLabel, "24b/96kHz")
+
+        let mp3 = Track(
+            id: "m1", sourceID: UUID(), filePath: "/m/3.mp3", fileName: "3.mp3",
+            fileSize: 1000, modifiedAt: Date(), format: .mp3,
+            title: "T", artist: "A", albumArtist: "A", album: "AL",
+            bitrate: 320
+        )
+        XCTAssertEqual(mp3.formatPrimaryLabel, "MP3")
+        XCTAssertEqual(mp3.formatDetailLabel, "320k")
+    }
+
+    func testTrackStatsPersistAcrossTrackReindexing() throws {
+        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("echo-stats-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let db = try EchoDatabase(dbURL: tmpDir.appendingPathComponent("test.sqlite"))
+        let sourceID = UUID()
+        let track = Track(
+            id: "track-abc", sourceID: sourceID, filePath: "/m/a.flac", fileName: "a.flac",
+            fileSize: 2048, modifiedAt: Date(), format: .flac,
+            title: "Here Comes the Sun", artist: "The Beatles", albumArtist: "The Beatles", album: "Abbey Road"
+        )
+        db.replaceTracks(forSourceID: sourceID, tracks: [track])
+
+        let savedStats = TrackStats(
+            trackID: track.id,
+            userPlayCount: 7,
+            lastPlayedAt: Date(),
+            onlinePopularity: 89,
+            onlinePlayCount: 886_736,
+            onlineSource: "deezer",
+            onlineFetchedAt: Date()
+        )
+        db.saveTrackStats(savedStats)
+
+        // Simulate full re-index replacing track rows for this source
+        db.replaceTracks(forSourceID: sourceID, tracks: [track])
+
+        let reloaded = db.loadAllTrackStats()
+        XCTAssertEqual(reloaded[track.id]?.userPlayCount, 7)
+        XCTAssertEqual(reloaded[track.id]?.onlinePopularity, 89)
+        XCTAssertEqual(reloaded[track.id]?.popularityBars, 5)
+    }
+
+    func testOnlinePopularityScoringAndTitleMatching() {
+        XCTAssertEqual(OnlinePopularityService.scoreFromDeezerRank(886_736), 89)
+        XCTAssertEqual(OnlinePopularityService.scoreFromDeezerRank(182_028), 18)
+        XCTAssertEqual(OnlinePopularityService.scoreFromLastFMPlaycount(10_000_000), 88)
+
+        XCTAssertEqual(
+            OnlinePopularityService.normalizeTitleForMatching("Here Comes The Sun (Remastered 2009)"),
+            "here comes the sun"
+        )
+        XCTAssertEqual(
+            OnlinePopularityService.normalizeTitleForMatching("Come Together - 2019 Mix [Deluxe Edition]"),
+            "come together 2019 mix"
+        )
+
+        let src = UUID()
+        let local = [
+            Track(id: "t1", sourceID: src, filePath: "/1.flac", fileName: "1.flac", fileSize: 1, modifiedAt: Date(), format: .flac,
+                  title: "Here Comes the Sun", artist: "The Beatles", albumArtist: "The Beatles", album: "Abbey Road", trackNumber: 7),
+            Track(id: "t2", sourceID: src, filePath: "/2.flac", fileName: "2.flac", fileSize: 1, modifiedAt: Date(), format: .flac,
+                  title: "Untitled Bonus Track", artist: "The Beatles", albumArtist: "The Beatles", album: "Abbey Road", trackNumber: 17)
+        ]
+        let remote = [
+            OnlinePopularityService.RemoteTrackCandidate(title: "Here Comes The Sun (Remastered 2009)", shortTitle: "Here Comes The Sun", trackPosition: 7, discNumber: 1, rank: 886_736),
+            OnlinePopularityService.RemoteTrackCandidate(title: "Her Majesty (Remastered 2009)", shortTitle: "Her Majesty", trackPosition: 17, discNumber: 1, rank: 182_028)
+        ]
+        let matched = OnlinePopularityService.matchRemoteTracks(remote, to: local)
+        let byID = Dictionary(uniqueKeysWithValues: matched.map { ($0.trackID, $0) })
+        XCTAssertEqual(byID["t1"]?.popularity, 89)
+        XCTAssertEqual(byID["t2"]?.popularity, 18) // matched via trackPosition fallback
+    }
+
+    func testTrackArrivalDateAndAlbumLatestArrivalDate() {
+        let src = UUID()
+        let oldMod = Date(timeIntervalSince1970: 1_600_000_000)
+        let recentDownload = Date(timeIntervalSince1970: 1_795_000_000)
+
+        let t1 = Track(id: "a1", sourceID: src, filePath: "/a1.flac", fileName: "a1.flac", fileSize: 100,
+                       modifiedAt: oldMod, addedAt: recentDownload, format: .flac,
+                       title: "Track 1", artist: "Artist", albumArtist: "Artist", album: "Album", year: 2026)
+        let t2 = Track(id: "a2", sourceID: src, filePath: "/a2.flac", fileName: "a2.flac", fileSize: 100,
+                       modifiedAt: oldMod, addedAt: nil, format: .flac,
+                       title: "Track 2", artist: "Artist", albumArtist: "Artist", album: "Album", year: 2026)
+
+        XCTAssertEqual(t1.arrivalDate, recentDownload)
+        XCTAssertEqual(t2.arrivalDate, oldMod)
+
+        let album = AlbumGroup(id: "k", title: "Album", artist: "Artist", year: 2026, tracks: [t1, t2])
+        XCTAssertEqual(album.latestArrivalDate, recentDownload)
+    }
+
+    // MARK: - Lidarr Client URL & Payload Builder Tests
+
+    func testLidarrURLNormalizationAndAddAlbumPayload() throws {
+        XCTAssertEqual(LidarrClient.normalizeBaseURL("192.168.1.50:8686/")?.absoluteString, "http://192.168.1.50:8686")
+        XCTAssertEqual(LidarrClient.normalizeBaseURL("https://lidarr.home.arpa/api/v1/")?.absoluteString, "https://lidarr.home.arpa")
+        XCTAssertNil(LidarrClient.normalizeBaseURL("   "))
+
+        let lookupJSON: [String: Any] = [
+            "foreignAlbumId": "mb-album-123",
+            "title": "Abbey Road",
+            "releases": [["foreignReleaseId": "rel-1", "monitored": true]],
+            "artist": [
+                "foreignArtistId": "mb-artist-456",
+                "artistName": "The Beatles"
+            ]
+        ]
+        let lookupData = try JSONSerialization.data(withJSONObject: lookupJSON)
+        let cfg = LidarrConfig(
+            isEnabled: true,
+            baseURL: "http://nas.local:8686",
+            apiKey: "secret-key",
+            rootFolderPath: "/music",
+            qualityProfileId: 2,
+            metadataProfileId: 1,
+            searchOnAdd: true
+        )
+
+        let payload = try LidarrClient.buildAddAlbumPayload(fromLookupData: lookupData, config: cfg)
+        let decoded = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        XCTAssertEqual(decoded["monitored"] as? Bool, true)
+        XCTAssertEqual(decoded["foreignAlbumId"] as? String, "mb-album-123")
+        let addOpts = try XCTUnwrap(decoded["addOptions"] as? [String: Any])
+        XCTAssertEqual(addOpts["searchForNewAlbum"] as? Bool, true)
+
+        let artist = try XCTUnwrap(decoded["artist"] as? [String: Any])
+        XCTAssertEqual(artist["rootFolderPath"] as? String, "/music")
+        XCTAssertEqual(artist["qualityProfileId"] as? Int, 2)
+        XCTAssertEqual(artist["metadataProfileId"] as? Int, 1)
+        let artistAddOpts = try XCTUnwrap(artist["addOptions"] as? [String: Any])
+        // Ensures ordering a single album doesn't accidentally download the artist's entire discography
+        XCTAssertEqual(artistAddOpts["monitor"] as? String, "none")
+        XCTAssertEqual(artistAddOpts["searchForMissingAlbums"] as? Bool, false)
+    }
+
+    func testLidarrQueueStatusReconciliationLifecycle() {
+        let now = Date()
+        let order1 = LidarrTrackedOrder(
+            id: "o1",
+            albumTitle: "Dark Side of the Moon",
+            artistName: "Pink Floyd",
+            lidarrAlbumID: 42,
+            orderedAt: now.addingTimeInterval(-30),
+            phase: .searching
+        )
+        let order2 = LidarrTrackedOrder(
+            id: "o2",
+            albumTitle: "Abbey Road",
+            artistName: "The Beatles",
+            lidarrAlbumID: 99,
+            orderedAt: now.addingTimeInterval(-120),
+            phase: .downloading,
+            progress: 0.75
+        )
+
+        let activeQueue = [
+            LidarrQueueItem(
+                id: 1,
+                albumId: 42,
+                title: "Pink Floyd - Dark Side of the Moon [FLAC]",
+                artistName: "Pink Floyd",
+                albumTitle: "Dark Side of the Moon",
+                status: "downloading",
+                trackedDownloadState: "downloading",
+                size: 400_000_000,
+                sizeleft: 100_000_000,
+                timeleft: "00:01:20",
+                qualityName: "FLAC"
+            )
+        ]
+
+        let history = [
+            LidarrHistoryItem(
+                id: 500,
+                albumId: 99,
+                albumTitle: "Abbey Road",
+                artistName: "The Beatles",
+                sourceTitle: "Abbey Road FLAC",
+                eventType: "trackFileImported",
+                qualityName: "FLAC",
+                date: now.addingTimeInterval(-10)
+            )
+        ]
+
+        let (updated, newlyCompleted) = LidarrClient.reconcileTrackedOrders([order1, order2], queue: activeQueue, history: history, now: now)
+        let u1 = updated.first { $0.id == "o1" }
+        let u2 = updated.first { $0.id == "o2" }
+
+        XCTAssertEqual(u1?.phase, .downloading)
+        XCTAssertEqual(u1?.progress ?? 0, 0.75, accuracy: 0.01)
+        XCTAssertEqual(u1?.qualityName, "FLAC")
+
+        XCTAssertEqual(u2?.phase, .completed)
+        XCTAssertEqual(u2?.progress ?? 0, 1.0, accuracy: 0.001)
+        XCTAssertEqual(newlyCompleted.map(\.id), ["o2"])
+    }
+
+    func testArtistNameParserSplitsListsAndProtectsBandNames() {
+        XCTAssertEqual(
+            ArtistNameParser.artistNames("Alan Walker, Noah Cyrus, Digital Farm Animals, Juliander"),
+            ["Alan Walker", "Noah Cyrus", "Digital Farm Animals", "Juliander"]
+        )
+        XCTAssertEqual(
+            ArtistNameParser.artistNames("112 feat. Mase & Notorious B.I.G."),
+            ["112", "Mase", "Notorious B.I.G."]
+        )
+        XCTAssertEqual(
+            ArtistNameParser.artistNames("David Guetta; Sia / Afrojack"),
+            ["David Guetta", "Sia", "Afrojack"]
+        )
+        XCTAssertEqual(
+            ArtistNameParser.artistNames("Earth, Wind & Fire"),
+            ["Earth, Wind & Fire"]
+        )
+        XCTAssertEqual(
+            ArtistNameParser.artistNames("Bruce Springsteen & The E Street Band"),
+            ["Bruce Springsteen & The E Street Band"]
+        )
+        XCTAssertEqual(
+            ArtistNameParser.artistNames("Tyler, The Creator"),
+            ["Tyler, The Creator"]
+        )
+        XCTAssertEqual(
+            ArtistNameParser.artistNames("AC/DC"),
+            ["AC/DC"]
+        )
+        let segs = ArtistNameParser.splitSegments("Kygo x Whitney Houston")
+        XCTAssertEqual(segs.map(\.name), ["Kygo", "Whitney Houston"])
+        XCTAssertEqual(segs.first?.trailingSeparator, " x ")
+    }
+
+    @MainActor
+    func testEqualPowerCrossfadeGainsAndShortTrackClamping() {
+        let start = AudioPlayerEngine.equalPowerGains(progress: 0.0)
+        XCTAssertEqual(start.outgoing, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(start.incoming, 0.0, accuracy: 0.0001)
+
+        let mid = AudioPlayerEngine.equalPowerGains(progress: 0.5)
+        XCTAssertEqual(mid.outgoing * mid.outgoing + mid.incoming * mid.incoming, 1.0, accuracy: 0.0001)
+        XCTAssertGreaterThan(mid.outgoing, 0.70)
+        XCTAssertGreaterThan(mid.incoming, 0.70)
+
+        let end = AudioPlayerEngine.equalPowerGains(progress: 1.0)
+        XCTAssertEqual(end.outgoing, 0.0, accuracy: 0.0001)
+        XCTAssertEqual(end.incoming, 1.0, accuracy: 0.0001)
+
+        // Short 10s track caps a 12s crossfade to 4s (40%)
+        XCTAssertEqual(AudioPlayerEngine.effectiveCrossfadeDuration(configured: 12, trackDuration: 10), 4.0, accuracy: 0.001)
+        // Normal 240s track keeps full configured 5s crossfade
+        XCTAssertEqual(AudioPlayerEngine.effectiveCrossfadeDuration(configured: 5, trackDuration: 240), 5.0, accuracy: 0.001)
+    }
+
+    func testVirtualIPhonePresetAndWirelessManifestVersioning() {
+        let dev = DeviceProfile(name: "iPhone", mountPath: "echo-wireless://iphone", preset: .iphoneWireless)
+        XCTAssertTrue(dev.isVirtualWireless)
+        XCTAssertTrue(dev.isConnected)
+        XCTAssertEqual(dev.wirelessSyncToken?.count, 6)
+        XCTAssertTrue(dev.supports(.flac))
+        XCTAssertTrue(dev.supports(.alac))
+        XCTAssertFalse(dev.supports(.dsf))
+
+        let t1 = WirelessSyncTrack(from: Track(
+            id: "t1", sourceID: UUID(), filePath: "/music/a.flac", fileName: "a.flac",
+            fileSize: 1000, modifiedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            format: .flac, title: "Song A", artist: "Artist", albumArtist: "Artist", album: "Album"
+        ))
+        let feed = WirelessSyncPodcastFeed(
+            from: PodcastShow(title: "Darknet Diaries", author: "Jack Rhysider", feedURL: "https://feeds.megaphone.fm/darknetdiaries", episodesToKeep: 5),
+            isSelectedForAutoSync: true
+        )
+        let v1 = WirelessDeviceSnapshot.computeManifestVersion(syncMode: "mirror", tracks: [t1], playlists: [], episodes: [], podcastFeeds: [])
+        let v2 = WirelessDeviceSnapshot.computeManifestVersion(syncMode: "mirror", tracks: [t1], playlists: [], episodes: [], podcastFeeds: [])
+        let v3 = WirelessDeviceSnapshot.computeManifestVersion(syncMode: "additive", tracks: [t1], playlists: [], episodes: [], podcastFeeds: [])
+        let v4 = WirelessDeviceSnapshot.computeManifestVersion(syncMode: "mirror", tracks: [t1], playlists: [], episodes: [], podcastFeeds: [feed])
+        XCTAssertEqual(v1, v2)
+        XCTAssertNotEqual(v1, v3)
+        XCTAssertNotEqual(v1, v4)
+
+        let ep = PodcastEpisode(
+            id: PodcastRSSParser.stableEpisodeID(showID: UUID(), guidOrURL: "ep-guid-1"),
+            showID: UUID(),
+            showTitle: "Darknet Diaries",
+            showAuthor: "Jack Rhysider",
+            guid: "ep-guid-1",
+            title: "Ep 1",
+            audioURL: "https://example.com/ep1.mp3",
+            fileSize: 12345
+        )
+        let wireEp = WirelessSyncEpisode(from: ep)
+        XCTAssertEqual(wireEp.guid, "ep-guid-1")
+        XCTAssertEqual(wireEp.audioURL, "https://example.com/ep1.mp3")
+
+        // Verify WirelessLibraryCatalog full-library search marks already-synced tracks accurately
+        let tr1 = Track(id: "t1", sourceID: UUID(), filePath: "/m/1.flac", fileName: "1.flac", fileSize: 100, modifiedAt: Date(), format: .flac, title: "Born to Run", artist: "Bruce Springsteen", albumArtist: "Bruce Springsteen", album: "Born to Run")
+        let tr2 = Track(id: "t2", sourceID: UUID(), filePath: "/m/2.flac", fileName: "2.flac", fileSize: 100, modifiedAt: Date(), format: .flac, title: "Thunder Road", artist: "Bruce Springsteen", albumArtist: "Bruce Springsteen", album: "Born to Run")
+        let alb = AlbumGroup(id: tr1.albumKey, title: "Born to Run", artist: "Bruce Springsteen", year: 1975, tracks: [tr1, tr2])
+        let catalog = WirelessLibraryCatalog(tracks: [tr1, tr2], albums: [alb])
+        let res = catalog.search(query: "springsteen", syncedTrackIDs: ["t1"])
+        XCTAssertEqual(res.albums.count, 1)
+        XCTAssertFalse(res.albums[0].isSelectedForSync) // only 1 of 2 tracks synced
+        XCTAssertEqual(res.tracks.count, 2)
+        XCTAssertEqual(res.tracks.first(where: { $0.id == "t1" })?.isSelectedForSync, true)
+        XCTAssertEqual(res.tracks.first(where: { $0.id == "t2" })?.isSelectedForSync, false)
+    }
+
+    func testUnifiedAlbumGroupingAndMajorityOrVariousArtistsResolution() {
+        let src = UUID()
+        func makeTrack(_ id: String, artist: String, albumArtist: String, album: String, num: Int) -> Track {
+            Track(
+                id: id, sourceID: src, filePath: "/m/\(id).flac", fileName: "\(id).flac",
+                fileSize: 1000, modifiedAt: Date(), format: .flac,
+                title: "Track \(num)", artist: artist, albumArtist: albumArtist, album: album, trackNumber: num
+            )
+        }
+
+        // 1. Compilation with mismatched albumArtist tags -> MUST still be 1 album, showing "Various Artists"
+        let compilation = [
+            makeTrack("c1", artist: "Bruce Springsteen", albumArtist: "Bruce Springsteen", album: "2000s Rock Essentials", num: 1),
+            makeTrack("c2", artist: "Coldplay", albumArtist: "Bruce Springsteen", album: "2000s Rock Essentials", num: 2),
+            makeTrack("c3", artist: "Foo Fighters", albumArtist: "Foo Fighters", album: "2000s Rock Essentials", num: 3),
+            makeTrack("c4", artist: "Green Day", albumArtist: "", album: "2000s Rock Essentials", num: 4),
+            makeTrack("c5", artist: "Oasis", albumArtist: "Various Artists", album: "2000s Rock Essentials", num: 5)
+        ]
+        let compAlbums = AlbumGroup.buildGroups(from: compilation)
+        XCTAssertEqual(compAlbums.count, 1)
+        XCTAssertEqual(compAlbums[0].tracks.count, 5)
+        XCTAssertEqual(compAlbums[0].artist, "Various Artists")
+
+        // 2. Album where one artist appears on >= half the tracks (2 of 4, others distinct), even with wrong/mixed albumArtist
+        let halfMajority = [
+            makeTrack("h1", artist: "Pink Floyd", albumArtist: "Various Artists", album: "Echoes Mix", num: 1),
+            makeTrack("h2", artist: "Pink Floyd", albumArtist: "Pink Floyd", album: "Echoes Mix", num: 2),
+            makeTrack("h3", artist: "Roger Waters", albumArtist: "Roger Waters", album: "Echoes Mix", num: 3),
+            makeTrack("h4", artist: "Clare Torry", albumArtist: "", album: "Echoes Mix", num: 4)
+        ]
+        let halfAlbums = AlbumGroup.buildGroups(from: halfMajority)
+        XCTAssertEqual(halfAlbums.count, 1)
+        XCTAssertEqual(halfAlbums[0].tracks.count, 4)
+        XCTAssertEqual(halfAlbums[0].artist, "Pink Floyd")
+
+        // 3. Album where more than half of tracks have different artists (2 of 5 by same artist -> 3 of 5 different) -> Various Artists
+        let minority = [
+            makeTrack("m1", artist: "Oasis", albumArtist: "Oasis", album: "Britpop Hits", num: 1),
+            makeTrack("m2", artist: "Oasis", albumArtist: "Oasis", album: "Britpop Hits", num: 2),
+            makeTrack("m3", artist: "Blur", albumArtist: "Oasis", album: "Britpop Hits", num: 3),
+            makeTrack("m4", artist: "Pulp", albumArtist: "Oasis", album: "Britpop Hits", num: 4),
+            makeTrack("m5", artist: "Suede", albumArtist: "Oasis", album: "Britpop Hits", num: 5)
+        ]
+        let minorityAlbums = AlbumGroup.buildGroups(from: minority)
+        XCTAssertEqual(minorityAlbums.count, 1)
+        XCTAssertEqual(minorityAlbums[0].artist, "Various Artists")
+
+        // 4. Collaboration album where main artist appears on every track with different guests
+        let collab = [
+            makeTrack("k1", artist: "Kygo feat. Imagine Dragons", albumArtist: "", album: "Golden Hour", num: 1),
+            makeTrack("k2", artist: "Kygo feat. OneRepublic", albumArtist: "", album: "Golden Hour", num: 2),
+            makeTrack("k3", artist: "Kygo, Selena Gomez", albumArtist: "", album: "Golden Hour", num: 3),
+            makeTrack("k4", artist: "Kygo feat. Ellie Goulding", albumArtist: "", album: "Golden Hour", num: 4)
+        ]
+        let collabAlbums = AlbumGroup.buildGroups(from: collab)
+        XCTAssertEqual(collabAlbums.count, 1)
+        XCTAssertEqual(collabAlbums[0].artist, "Kygo")
+
+        // 5. Exact 50/50 split between two artists with no advisory albumArtist -> Various Artists
+        let tieNoAdvisory = [
+            makeTrack("s1", artist: "Artist A", albumArtist: "", album: "Split EP", num: 1),
+            makeTrack("s2", artist: "Artist B", albumArtist: "", album: "Split EP", num: 2)
+        ]
+        XCTAssertEqual(AlbumGroup.buildGroups(from: tieNoAdvisory).first?.artist, "Various Artists")
+
+        // 6. SyncPlanner keeps ALL tracks of a VA album inside ONE "Various Artists/<Album>/" folder (never splits per track artist!)
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("echo-va-sync-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let f1 = tmp.appendingPathComponent("1.mp3")
+        let f2 = tmp.appendingPathComponent("2.mp3")
+        let f3 = tmp.appendingPathComponent("3.mp3")
+        try? Data([0xFF, 0xFB]).write(to: f1)
+        try? Data([0xFF, 0xFB]).write(to: f2)
+        try? Data([0xFF, 0xFB]).write(to: f3)
+        let vaTracks = [
+            Track(id: "va1", sourceID: src, filePath: f1.path, fileName: "1.mp3", fileSize: 2, modifiedAt: Date(), format: .mp3, title: "Someone You Loved", artist: "Lewis Capaldi", albumArtist: "", album: "Road Trip Hits", trackNumber: 1),
+            Track(id: "va2", sourceID: src, filePath: f2.path, fileName: "2.mp3", fileSize: 2, modifiedAt: Date(), format: .mp3, title: "Yellow", artist: "Coldplay", albumArtist: "Coldplay", album: "Road Trip Hits", trackNumber: 2),
+            Track(id: "va3", sourceID: src, filePath: f3.path, fileName: "3.mp3", fileSize: 2, modifiedAt: Date(), format: .mp3, title: "Wonderwall", artist: "Oasis", albumArtist: "Oasis", album: "Road Trip Hits", trackNumber: 3)
+        ]
+        let dev = DeviceProfile(name: "ECHO SD", mountPath: tmp.appendingPathComponent("dev").path, preset: .fiioEchoMini, selectedAlbumKeys: [vaTracks[0].albumKey])
+        let plan = SyncPlanner.buildPlan(profile: dev, allTracks: vaTracks, playlists: [])
+        XCTAssertEqual(plan.tracksToCopy.count, 3)
+        for item in plan.tracksToCopy {
+            XCTAssertTrue(item.relativeDestinationPath.hasPrefix("Music/Various Artists/Road Trip Hits/"), "Unexpected split path: \(item.relativeDestinationPath)")
+        }
+
+        // 7. Distinct studio albums sharing a common title (e.g. Anastacia/Evolution vs Sabrina Carpenter/EVOLution) stay separate!
+        let evo1 = Track(id: "e1", sourceID: src, filePath: "/MUSIC/Anastacia/Evolution (2017)/01.flac", fileName: "01.flac", fileSize: 1000, modifiedAt: Date(), format: .flac, title: "Caught in the Middle", artist: "Anastacia", albumArtist: "Anastacia", album: "Evolution", trackNumber: 1)
+        let evo2 = Track(id: "e2", sourceID: src, filePath: "/MUSIC/Sabrina Carpenter/EVOLution (2016)/01.flac", fileName: "01.flac", fileSize: 1000, modifiedAt: Date(), format: .flac, title: "On Purpose", artist: "Sabrina Carpenter", albumArtist: "Sabrina Carpenter", album: "EVOLution", trackNumber: 1)
+        let evoAlbums = AlbumGroup.buildGroups(from: [evo1, evo2])
+        XCTAssertEqual(evoAlbums.count, 2)
+        XCTAssertEqual(Set(evoAlbums.map(\.artist)), Set(["Anastacia", "Sabrina Carpenter"]))
+
+        // 8. Zero-width BOM characters are stripped from folder paths
+        XCTAssertEqual(PathFormatter.sanitizeSegment("Alan Walker\u{FEFF}\u{FEFF}"), "Alan Walker")
+    }
+
+    func testVolumeHardwareConnectionClassificationAndZeroUUIDSanitization() {
+        // 1. All-zero FAT32 UUID must be sanitized to nil
+        XCTAssertNil(VolumeMonitor.sanitizedVolumeUUID("00000000-0000-0000-0000-000000000000"))
+        XCTAssertEqual(
+            VolumeMonitor.sanitizedVolumeUUID("A7E25008-C053-472B-BE1E-F866654136B7"),
+            "A7E25008-C053-472B-BE1E-F866654136B7"
+        )
+
+        // 2. Genesys Logic USB Card Reader (0x05E3:0x0751, "USB Storage" / "Generic STORAGE DEVICE")
+        let usbReader = VolumeMonitor.classifyHardware(
+            classNames: ["IOMedia", "IOBlockStorageDriver", "IOUSBMassStorageDriver", "IOUSBHostDevice"],
+            interconnect: "USB",
+            interconnectLocation: "External",
+            usbVendorID: 0x05E3,
+            usbProductID: 0x0751,
+            usbVendorName: "USB Storage",
+            usbProductName: "USB Storage",
+            scsiVendor: "Generic",
+            scsiProduct: "STORAGE DEVICE"
+        )
+        XCTAssertEqual(usbReader.connectionKind, .usbCardReader)
+        XCTAssertEqual(usbReader.vendorName, "Genesys Logic")
+
+        // 3. Built-in Mac SDXC Slot
+        let macSD = VolumeMonitor.classifyHardware(
+            classNames: ["IOMedia", "AppleSDXCBlockStorageDevice", "AppleSDXC"],
+            interconnect: "Secure Digital",
+            interconnectLocation: "Internal",
+            usbVendorID: nil,
+            usbProductID: nil,
+            usbVendorName: nil,
+            usbProductName: nil,
+            scsiVendor: nil,
+            scsiProduct: "APPLE SD Card Reader"
+        )
+        XCTAssertEqual(macSD.connectionKind, .builtInCardReader)
+
+        // 4. FiiO / Snowsky DAP over USB
+        let fiioPlayer = VolumeMonitor.classifyHardware(
+            classNames: ["IOMedia", "IOUSBMassStorageDriver", "IOUSBHostDevice"],
+            interconnect: "USB",
+            interconnectLocation: "External",
+            usbVendorID: 0x2972,
+            usbProductID: 0x0012,
+            usbVendorName: "FiiO",
+            usbProductName: "ECHO MINI",
+            scsiVendor: "FiiO",
+            scsiProduct: "ECHO MINI SD"
+        )
+        XCTAssertEqual(fiioPlayer.connectionKind, .inPlayer)
+        XCTAssertEqual(fiioPlayer.vendorName, "FiiO / Snowsky")
+
+        // 5. Rockchip / Actions DAP over USB
+        let rockchipPlayer = VolumeMonitor.classifyHardware(
+            classNames: ["IOMedia", "IOUSBMassStorageDriver", "IOUSBHostDevice"],
+            interconnect: "USB",
+            interconnectLocation: "External",
+            usbVendorID: 0x2207,
+            usbProductID: 0x0001,
+            usbVendorName: "Rockchip",
+            usbProductName: "USB Mass Storage",
+            scsiVendor: "Rockchip",
+            scsiProduct: "DAP"
+        )
+        XCTAssertEqual(rockchipPlayer.connectionKind, .inPlayer)
+    }
+
+    func testEditorialInfoSQLitePersistenceAndStalenessTTL() throws {
+        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("echo-editorial-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let db = try EchoDatabase(dbURL: tmpDir.appendingPathComponent("test.sqlite"))
+        let now = Date()
+        let freshAlbum = AlbumEditorialInfo(
+            albumKey: "faithless::reverence",
+            releaseDate: "1996-04-08",
+            label: "Cheeky Records",
+            genres: ["Electronic", "Dance"],
+            albumFans: 48200,
+            artistFans: 615000,
+            artistAlbumCount: 19,
+            albumSummary: "Reverence is the debut studio album by British electronic band Faithless.",
+            artistSummary: "Faithless are a British electronic band formed in London in 1995.",
+            artistImageURL: "https://example.com/faithless.jpg",
+            fetchedAt: now
+        )
+        let staleArtist = ArtistEditorialInfo(
+            artistKey: "faithless",
+            summary: "British electronic band formed in 1995.",
+            fans: 615000,
+            albumCount: 19,
+            imageURL: "https://example.com/faithless.jpg",
+            fetchedAt: now.addingTimeInterval(-15 * 24 * 60 * 60)
+        )
+
+        db.saveAlbumEditorial(freshAlbum)
+        db.saveArtistEditorial(staleArtist)
+
+        let loadedAlbums = db.loadAllAlbumEditorial()
+        let loadedArtists = db.loadAllArtistEditorial()
+
+        let roundTripAlbum = try XCTUnwrap(loadedAlbums["faithless::reverence"])
+        XCTAssertEqual(roundTripAlbum.label, "Cheeky Records")
+        XCTAssertEqual(roundTripAlbum.releaseDate, "1996-04-08")
+        XCTAssertEqual(roundTripAlbum.genres, ["Electronic", "Dance"])
+        XCTAssertFalse(roundTripAlbum.isStale)
+        XCTAssertTrue(roundTripAlbum.hasDisplayableContent)
+
+        let roundTripArtist = try XCTUnwrap(loadedArtists["faithless"])
+        XCTAssertEqual(roundTripArtist.fans, 615000)
+        XCTAssertTrue(roundTripArtist.isStale)
+    }
+
     private func appendSynchsafe(_ d: inout Data, _ v: Int) {
         d.append(contentsOf: [
             UInt8((v >> 21) & 0x7F),

@@ -137,6 +137,26 @@ public struct SyncPlan: Sendable {
             || !episodesToCopy.isEmpty || !episodesToRemove.isEmpty
             || !playlistsToWrite.isEmpty || !playlistPathsToRemove.isEmpty
     }
+
+    public static func empty(for device: DeviceProfile, projectedTracks: Int = 0) -> SyncPlan {
+        SyncPlan(
+            deviceID: device.id,
+            tracksToCopy: [],
+            tracksUpToDate: [],
+            tracksToRemove: [],
+            episodesToCopy: [],
+            episodesUpToDate: [],
+            episodesToRemove: [],
+            unsupportedSkipped: [],
+            offlineSkipped: [],
+            playlistsToWrite: [],
+            playlistPathsToRemove: [],
+            estimatedBytesToWrite: 0,
+            estimatedBytesToFree: 0,
+            projectedTotalTracks: projectedTracks,
+            maxTrackLimit: device.maxTrackLimit
+        )
+    }
 }
 
 public struct SyncProgress: Sendable {
@@ -193,14 +213,33 @@ public enum SyncPlanner {
     public static func resolveSelectedTrackIDs(
         profile: DeviceProfile,
         allTracks: [Track],
-        playlists: [Playlist]
+        playlists: [Playlist],
+        precomputedAlbumByTrackID: [String: AlbumGroup]? = nil
     ) -> Set<String> {
         var ids = profile.selectedTrackIDs
 
-        for track in allTracks {
-            if profile.selectedArtistKeys.contains(track.artistKey) ||
-               profile.selectedAlbumKeys.contains(track.albumKey) {
-                ids.insert(track.id)
+        // Use precomputed album map when supplied to avoid expensive O(N) rebuilds on hot UI paths
+        let resolvedLookup: [String: AlbumGroup]
+        if profile.selectedArtistKeys.isEmpty && profile.selectedAlbumKeys.isEmpty {
+            resolvedLookup = [:]
+        } else if let precomputedAlbumByTrackID {
+            resolvedLookup = precomputedAlbumByTrackID
+        } else {
+            resolvedLookup = AlbumGroup.buildGroupsWithTrackLookup(from: allTracks).albumByTrackID
+        }
+
+        if !profile.selectedArtistKeys.isEmpty || !profile.selectedAlbumKeys.isEmpty {
+            for track in allTracks {
+                let resolvedAlbum = resolvedLookup[track.id]
+                let resolvedAlbumID = resolvedAlbum?.id ?? track.albumKey
+                let resolvedAlbumArtistKey = resolvedAlbum?.artist.lowercased()
+                if profile.selectedArtistKeys.contains(track.artistKey) ||
+                   (resolvedAlbumArtistKey.map { profile.selectedArtistKeys.contains($0) } ?? false) ||
+                   profile.selectedAlbumKeys.contains(resolvedAlbumID) ||
+                   profile.selectedAlbumKeys.contains(track.albumKey) ||
+                   profile.selectedAlbumKeys.contains(track.legacyAlbumKey) {
+                    ids.insert(track.id)
+                }
             }
         }
 
@@ -243,16 +282,56 @@ public enum SyncPlanner {
         allTracks: [Track],
         playlists: [Playlist],
         podcasts: [PodcastShow] = [],
-        manifest: DeviceSyncManifest? = nil
+        manifest: DeviceSyncManifest? = nil,
+        precomputedAlbumByTrackID: [String: AlbumGroup]? = nil
     ) -> SyncPlan {
-        let currentManifest = manifest ?? (
-            profile.isConnected
+        let tracksByID = Dictionary(uniqueKeysWithValues: allTracks.map { ($0.id, $0) })
+        // Resolve one unified folder artist per album (reusing precomputed map when available!)
+        let albumByTrackID = precomputedAlbumByTrackID ?? AlbumGroup.buildGroupsWithTrackLookup(from: allTracks).albumByTrackID
+        let currentManifest: DeviceSyncManifest = {
+            if let manifest { return manifest }
+            if profile.isVirtualWireless {
+                var m = DeviceSyncManifest(deviceID: profile.id)
+                for tid in profile.syncedTrackIDs {
+                    if let t = tracksByID[tid] {
+                        m.tracks[tid] = .init(
+                            trackID: tid,
+                            relativePath: PathFormatter.relativeTrackPath(
+                                for: t,
+                                profile: profile,
+                                albumArtistOverride: albumByTrackID[t.id]?.artist
+                            ),
+                            sourceFileSize: t.fileSize,
+                            sourceModifiedTimestamp: t.modifiedAt.timeIntervalSince1970,
+                            optimizedArtwork: false
+                        )
+                    } else {
+                        m.tracks[tid] = .init(trackID: tid, relativePath: tid, sourceFileSize: 0, sourceModifiedTimestamp: 0, optimizedArtwork: false)
+                    }
+                }
+                for show in podcasts {
+                    for ep in show.episodes where profile.syncedEpisodeIDs.contains(ep.id) {
+                        m.episodes[ep.id] = .init(
+                            episodeID: ep.id,
+                            showID: show.id,
+                            relativePath: PathFormatter.relativeEpisodePath(for: ep, profile: profile),
+                            fileSize: ep.fileSize
+                        )
+                    }
+                }
+                return m
+            }
+            return profile.isConnected
                 ? DeviceSyncManifest.load(fromMountPath: profile.mountPath, fallbackDeviceID: profile.id)
                 : DeviceSyncManifest(deviceID: profile.id)
-        )
+        }()
 
-        let selectedIDs = resolveSelectedTrackIDs(profile: profile, allTracks: allTracks, playlists: playlists)
-        let tracksByID = Dictionary(uniqueKeysWithValues: allTracks.map { ($0.id, $0) })
+        let selectedIDs = resolveSelectedTrackIDs(
+            profile: profile,
+            allTracks: allTracks,
+            playlists: playlists,
+            precomputedAlbumByTrackID: albumByTrackID
+        )
 
         var desiredTracks: [Track] = []
         var unsupported: [Track] = []
@@ -276,8 +355,8 @@ public enum SyncPlanner {
         }
 
         desiredTracks.sort {
-            ($0.effectiveArtist, $0.effectiveAlbum, $0.discNumber ?? 1, $0.trackNumber ?? 0, $0.title, $0.id) <
-            ($1.effectiveArtist, $1.effectiveAlbum, $1.discNumber ?? 1, $1.trackNumber ?? 0, $1.title, $1.id)
+            (albumByTrackID[$0.id]?.artist ?? $0.effectiveArtist, $0.effectiveAlbum, $0.discNumber ?? 1, $0.trackNumber ?? 0, $0.title, $0.id) <
+            (albumByTrackID[$1.id]?.artist ?? $1.effectiveArtist, $1.effectiveAlbum, $1.discNumber ?? 1, $1.trackNumber ?? 0, $1.title, $1.id)
         }
 
         var usedPaths: Set<String> = []
@@ -287,7 +366,11 @@ public enum SyncPlanner {
         var bytesToWrite: Int64 = 0
 
         for track in desiredTracks {
-            var relPath = PathFormatter.relativeTrackPath(for: track, profile: profile)
+            var relPath = PathFormatter.relativeTrackPath(
+                for: track,
+                profile: profile,
+                albumArtistOverride: albumByTrackID[track.id]?.artist
+            )
             if usedPaths.contains(relPath.lowercased()) {
                 let ns = relPath as NSString
                 let base = ns.deletingPathExtension
@@ -303,10 +386,11 @@ public enum SyncPlanner {
 
             let destFullPath = URL(fileURLWithPath: profile.mountPath).appendingPathComponent(relPath).path
             if let existing = currentManifest.tracks[track.id],
-               existing.relativePath == relPath,
-               existing.sourceFileSize == track.fileSize,
-               abs(existing.sourceModifiedTimestamp - track.modifiedAt.timeIntervalSince1970) < 2.0,
-               (!profile.isConnected || FileManager.default.fileExists(atPath: destFullPath)) {
+               (profile.isVirtualWireless
+                || (existing.relativePath == relPath
+                    && existing.sourceFileSize == track.fileSize
+                    && abs(existing.sourceModifiedTimestamp - track.modifiedAt.timeIntervalSince1970) < 2.0
+                    && (!profile.isConnected || FileManager.default.fileExists(atPath: destFullPath)))) {
                 upToDate.append(.init(track: track, relativeDestinationPath: relPath))
             } else {
                 toCopy.append(.init(track: track, relativeDestinationPath: relPath))
@@ -341,8 +425,9 @@ public enum SyncPlanner {
 
             let destFullPath = URL(fileURLWithPath: profile.mountPath).appendingPathComponent(relPath).path
             if let existing = currentManifest.episodes[ep.id],
-               existing.relativePath == relPath,
-               (!profile.isConnected || FileManager.default.fileExists(atPath: destFullPath)) {
+               (profile.isVirtualWireless
+                || (existing.relativePath == relPath
+                    && (!profile.isConnected || FileManager.default.fileExists(atPath: destFullPath)))) {
                 episodesUpToDate.append(.init(episode: ep, relativeDestinationPath: relPath, needsDownloadFirst: false))
             } else {
                 episodesToCopy.append(.init(episode: ep, relativeDestinationPath: relPath, needsDownloadFirst: !ep.isDownloaded))
@@ -554,13 +639,74 @@ public actor SyncEngine {
                 isFinished: false
             ))
 
+            let destURL = mountURL.appendingPathComponent(item.relativeDestinationPath)
+
+            // Fast in-place relocation: if the exact same source file is ALREADY synced on the device
+            // under an older path (e.g. migrating split VA album folders -> Music/Various Artists/<Album>/),
+            // move it in-place on the SD card without re-copying over USB!
             if let oldEntry = manifest.tracks[item.track.id], oldEntry.relativePath != item.relativeDestinationPath {
                 let oldURL = mountURL.appendingPathComponent(oldEntry.relativePath)
+                let canRelocateInPlace = fm.fileExists(atPath: oldURL.path)
+                    && oldEntry.sourceFileSize == item.track.fileSize
+                    && abs(oldEntry.sourceModifiedTimestamp - item.track.modifiedAt.timeIntervalSince1970) < 2.0
+
+                if canRelocateInPlace {
+                    do {
+                        let destDir = destURL.deletingLastPathComponent()
+                        try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+                        if fm.fileExists(atPath: destURL.path) {
+                            try fm.removeItem(at: destURL)
+                        }
+                        try fm.moveItem(at: oldURL, to: destURL)
+
+                        // Move .lrc sidecar if present
+                        var newLrcRel: String? = nil
+                        if let oldLrcRel = oldEntry.lyricsRelativePath {
+                            let oldLrcURL = mountURL.appendingPathComponent(oldLrcRel)
+                            let candidateLrcRel = (item.relativeDestinationPath as NSString).deletingPathExtension + ".lrc"
+                            let destLrcURL = mountURL.appendingPathComponent(candidateLrcRel)
+                            if fm.fileExists(atPath: oldLrcURL.path) {
+                                try? fm.removeItem(at: destLrcURL)
+                                if (try? fm.moveItem(at: oldLrcURL, to: destLrcURL)) != nil {
+                                    newLrcRel = candidateLrcRel
+                                }
+                            }
+                        }
+
+                        // Preserve folder.jpg in the unified album folder
+                        if profile.writeFolderCoverJPG {
+                            let oldFolderJPG = oldURL.deletingLastPathComponent().appendingPathComponent("folder.jpg")
+                            let destFolderJPG = destDir.appendingPathComponent("folder.jpg")
+                            if !fm.fileExists(atPath: destFolderJPG.path), fm.fileExists(atPath: oldFolderJPG.path) {
+                                try? fm.copyItem(at: oldFolderJPG, to: destFolderJPG)
+                            }
+                        }
+
+                        pruneEmptyAlbumFolder(oldURL.deletingLastPathComponent(), stopAt: mountURL)
+
+                        manifest.tracks[item.track.id] = DeviceSyncManifest.SyncedTrackEntry(
+                            trackID: item.track.id,
+                            relativePath: item.relativeDestinationPath,
+                            sourceFileSize: oldEntry.sourceFileSize,
+                            sourceModifiedTimestamp: oldEntry.sourceModifiedTimestamp,
+                            optimizedArtwork: oldEntry.optimizedArtwork,
+                            lyricsRelativePath: newLrcRel
+                        )
+                        tracksCopied += 1
+                        completed += 1
+                        continue
+                    } catch {
+                        // Fall through to full copy if in-place move fails
+                    }
+                }
+
                 try? fm.removeItem(at: oldURL)
+                if let oldLrcRel = oldEntry.lyricsRelativePath {
+                    try? fm.removeItem(at: mountURL.appendingPathComponent(oldLrcRel))
+                }
                 pruneEmptyAlbumFolder(oldURL.deletingLastPathComponent(), stopAt: mountURL)
             }
 
-            let destURL = mountURL.appendingPathComponent(item.relativeDestinationPath)
             do {
                 let report = try AudioFileCopyOptimizer.copyTrack(
                     item.track,

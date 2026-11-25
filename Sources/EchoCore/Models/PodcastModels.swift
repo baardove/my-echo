@@ -30,15 +30,124 @@ public enum PodcastDirectory: String, Codable, CaseIterable, Identifiable, Senda
 public enum PodcastBrowseCategory: String, CaseIterable, Identifiable, Sendable {
     case featured = "Featured"
     case topCharts = "Top Charts"
+    case news = "News"
     case technology = "Technology"
+    case business = "Business"
     case musicAudio = "Music & Hi-Fi"
     case science = "Science"
     case history = "History"
     case comedy = "Comedy"
     case trueCrime = "True Crime"
+    case societyCulture = "Society & Culture"
+    case sports = "Sports"
+    case healthFitness = "Health & Fitness"
+    case arts = "Arts"
+    case tvFilm = "TV & Film"
+    case education = "Education"
+    case fiction = "Fiction"
     case nordic = "Nordic / NO"
 
     public var id: String { rawValue }
+
+    /// Official Apple Podcasts genreId for precise genre-scoped directory search
+    public var appleGenreID: Int? {
+        switch self {
+        case .featured, .topCharts, .nordic: return nil
+        case .news: return 1489
+        case .technology: return 1318
+        case .business: return 1321
+        case .musicAudio: return 1310
+        case .science: return 1533
+        case .history: return 1487
+        case .comedy: return 1303
+        case .trueCrime: return 1488
+        case .societyCulture: return 1324
+        case .sports: return 1545
+        case .healthFitness: return 1512
+        case .arts: return 1301
+        case .tvFilm: return 1309
+        case .education: return 1304
+        case .fiction: return 1483
+        }
+    }
+
+    public var gpodderTag: String? {
+        switch self {
+        case .featured, .topCharts, .nordic: return nil
+        case .news: return "news"
+        case .technology: return "technology"
+        case .business: return "business"
+        case .musicAudio: return "music"
+        case .science: return "science"
+        case .history: return "history"
+        case .comedy: return "comedy"
+        case .trueCrime: return "true-crime"
+        case .societyCulture: return "society"
+        case .sports: return "sports"
+        case .healthFitness: return "health"
+        case .arts: return "arts"
+        case .tvFilm: return "tv-film"
+        case .education: return "education"
+        case .fiction: return "fiction"
+        }
+    }
+
+    public var countryCode: String {
+        self == .nordic ? "NO" : "US"
+    }
+
+    public var defaultBrowseTerm: String {
+        switch self {
+        case .featured: return "podcast"
+        case .topCharts: return "podcast"
+        case .news: return "news"
+        case .technology: return "technology"
+        case .business: return "business"
+        case .musicAudio: return "music"
+        case .science: return "science"
+        case .history: return "history"
+        case .comedy: return "comedy"
+        case .trueCrime: return "crime"
+        case .societyCulture: return "culture"
+        case .sports: return "sports"
+        case .healthFitness: return "health"
+        case .arts: return "arts"
+        case .tvFilm: return "film"
+        case .education: return "education"
+        case .fiction: return "fiction"
+        case .nordic: return "podkast"
+        }
+    }
+
+    /// Detects when a typed search query matches a known genre/category (English or Norwegian aliases)
+    public static func matchingGenre(for query: String) -> PodcastBrowseCategory? {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return nil }
+        let aliases: [(PodcastBrowseCategory, [String])] = [
+            (.news, ["news", "nyheter", "politics", "politikk", "current events"]),
+            (.technology, ["tech", "technology", "teknologi", "software", "programming", "ai", "gadgets"]),
+            (.business, ["business", "finance", "finans", "økonomi", "economics", "investing", "startups"]),
+            (.musicAudio, ["music", "musikk", "hi-fi", "hifi", "audiophile", "audio", "vinyl"]),
+            (.science, ["science", "vitenskap", "physics", "space", "astronomy", "biology"]),
+            (.history, ["history", "historie", "documentary", "dokumentar"]),
+            (.comedy, ["comedy", "humor", "funny", "standup"]),
+            (.trueCrime, ["true crime", "crime", "krim", "murder", "mystery", "detective"]),
+            (.societyCulture, ["society", "culture", "kultur", "samfunn", "philosophy", "filosofi"]),
+            (.sports, ["sports", "sport", "football", "fotball", "soccer", "f1", "formula 1", "cycling"]),
+            (.healthFitness, ["health", "fitness", "helse", "trening", "running", "mental health", "wellness"]),
+            (.arts, ["arts", "art", "kunst", "design", "books", "literature"]),
+            (.tvFilm, ["tv", "film", "movies", "cinema", "series"]),
+            (.education, ["education", "learning", "utdanning", "language", "courses"]),
+            (.fiction, ["fiction", "storytelling", "audio drama", "sci-fi", "fantasy"]),
+            (.nordic, ["nordic", "norway", "norwegian", "norsk", "norge", "nrk", "podkast"])
+        ]
+        for (cat, words) in aliases {
+            if cat.rawValue.lowercased() == q || words.contains(q) {
+                return cat
+            }
+        }
+        return nil
+    }
 }
 
 public struct PodcastSearchResult: Identifiable, Codable, Hashable, Sendable {
@@ -71,6 +180,9 @@ public struct PodcastSearchResult: Identifiable, Codable, Hashable, Sendable {
 }
 
 public struct PodcastShow: Identifiable, Codable, Hashable, Sendable {
+    public static let singleEpisodesShowID = UUID(uuidString: "E0E0E0E0-5146-4E47-4C45-000000000001")!
+    public static let singleEpisodesFeedURL = "echo://single-episodes"
+
     public var id: UUID
     public var title: String
     public var author: String
@@ -83,6 +195,10 @@ public struct PodcastShow: Identifiable, Codable, Hashable, Sendable {
     /// When newer episodes arrive, older episodes beyond this limit are automatically removed on sync.
     public var episodesToKeep: Int
     public var episodes: [PodcastEpisode]
+
+    public var isSingleEpisodesBucket: Bool {
+        id == Self.singleEpisodesShowID || feedURL == Self.singleEpisodesFeedURL
+    }
 
     public init(
         id: UUID = UUID(),

@@ -20,19 +20,20 @@ public final class AudioPlayerEngine: NSObject, AVAudioPlayerDelegate {
     public private(set) var playbackError: String?
     public private(set) var spectrumBands: [Double] = Array(repeating: 0, count: 16)
     public private(set) var peakHolds: [Double] = Array(repeating: 0, count: 16)
+    public private(set) var isCrossfading: Bool = false
 
     public var volume: Double = 0.85 {
         didSet {
             let clamped = max(0, min(1, volume))
             if clamped != volume { volume = clamped; return }
-            player?.volume = isMuted ? 0 : Float(clamped)
+            applyCurrentVolumes()
             onSettingsChanged?()
         }
     }
 
     public var isMuted: Bool = false {
         didSet {
-            player?.volume = isMuted ? 0 : Float(volume)
+            applyCurrentVolumes()
         }
     }
 
@@ -49,11 +50,53 @@ public final class AudioPlayerEngine: NSObject, AVAudioPlayerDelegate {
         }
     }
 
+    public var crossfadeEnabled: Bool = false {
+        didSet {
+            if !crossfadeEnabled && isCrossfading {
+                cancelActiveCrossfade()
+            }
+            onSettingsChanged?()
+        }
+    }
+
+    public var crossfadeDuration: TimeInterval = 5.0 {
+        didSet {
+            let clamped = max(1.0, min(12.0, crossfadeDuration))
+            if abs(clamped - crossfadeDuration) > 0.001 {
+                crossfadeDuration = clamped
+                return
+            }
+            onSettingsChanged?()
+        }
+    }
+
     public var onSettingsChanged: (() -> Void)?
+    /// Fired once per playback session when a track reaches its play threshold (min(30s, 50% duration)) or completes.
+    public var onTrackPlayed: ((Track) -> Void)?
 
     private var originalQueue: [Track] = []
     private var player: AVAudioPlayer?
+    private var fadingOutPlayer: AVAudioPlayer?
+    private var crossfadeElapsed: TimeInterval = 0
+    private var activeCrossfadeDuration: TimeInterval = 0
     private var progressTimer: Timer?
+    private var currentSessionTrackID: String?
+    private var currentSessionListenedSeconds: TimeInterval = 0
+    private var currentSessionRecordedPlay: Bool = false
+    private var lastTickWallTime: Date?
+
+    /// Equal-power crossfade gains (constant acoustic energy: out^2 + in^2 = 1.0)
+    public static func equalPowerGains(progress: Double) -> (outgoing: Double, incoming: Double) {
+        let t = max(0.0, min(1.0, progress))
+        let angle = t * (.pi / 2.0)
+        return (cos(angle), sin(angle))
+    }
+
+    /// Computes effective crossfade window for a track duration so very short tracks don't prematurely fade out
+    public static func effectiveCrossfadeDuration(configured: TimeInterval, trackDuration: TimeInterval) -> TimeInterval {
+        guard configured > 0, trackDuration > 2.5 else { return 0 }
+        return min(configured, trackDuration * 0.4)
+    }
 
     public override init() {
         super.init()
@@ -145,6 +188,9 @@ public final class AudioPlayerEngine: NSObject, AVAudioPlayerDelegate {
         }
         if !player.isPlaying {
             player.play()
+            if isCrossfading {
+                fadingOutPlayer?.play()
+            }
             isPlaying = true
             startTimer()
         }
@@ -153,12 +199,15 @@ public final class AudioPlayerEngine: NSObject, AVAudioPlayerDelegate {
     public func pause() {
         guard let player, player.isPlaying else { return }
         player.pause()
+        fadingOutPlayer?.pause()
         isPlaying = false
         stopTimer()
         decayMeters()
     }
 
     public func stopPlaybackKeepTrack() {
+        cancelActiveCrossfade()
+        cancelAntiPopFade()
         player?.stop()
         player?.currentTime = 0
         isPlaying = false
@@ -170,20 +219,27 @@ public final class AudioPlayerEngine: NSObject, AVAudioPlayerDelegate {
 
     public func nextTrack() {
         guard !queue.isEmpty else { return }
+        let manualFade: TimeInterval? = (crossfadeEnabled && isPlaying) ? min(1.5, crossfadeDuration) : nil
         if repeatMode == .one {
-            seek(to: 0)
-            player?.play()
-            isPlaying = true
-            startTimer()
+            if let fade = manualFade {
+                loadAndPlayCurrent(crossfadeSeconds: fade)
+            } else {
+                seek(to: 0)
+                resetPlaySession(for: currentTrack)
+                player?.play()
+                isPlaying = true
+                startTimer()
+            }
             return
         }
         if currentIndex + 1 < queue.count {
             currentIndex += 1
-            loadAndPlayCurrent()
+            loadAndPlayCurrent(crossfadeSeconds: manualFade)
         } else if repeatMode == .all {
             currentIndex = 0
-            loadAndPlayCurrent()
+            loadAndPlayCurrent(crossfadeSeconds: manualFade)
         } else {
+            cancelActiveCrossfade()
             isPlaying = false
             stopTimer()
         }
@@ -195,12 +251,13 @@ public final class AudioPlayerEngine: NSObject, AVAudioPlayerDelegate {
             seek(to: 0)
             return
         }
+        let manualFade: TimeInterval? = (crossfadeEnabled && isPlaying) ? min(1.5, crossfadeDuration) : nil
         if currentIndex > 0 {
             currentIndex -= 1
-            loadAndPlayCurrent()
+            loadAndPlayCurrent(crossfadeSeconds: manualFade)
         } else if repeatMode == .all {
             currentIndex = queue.count - 1
-            loadAndPlayCurrent()
+            loadAndPlayCurrent(crossfadeSeconds: manualFade)
         } else {
             seek(to: 0)
         }
@@ -216,53 +273,204 @@ public final class AudioPlayerEngine: NSObject, AVAudioPlayerDelegate {
 
     public func seek(to seconds: TimeInterval) {
         guard let player else { return }
+        if isCrossfading {
+            cancelActiveCrossfade()
+        }
         let clamped = max(0, min(seconds, player.duration))
         player.currentTime = clamped
         currentTime = clamped
     }
 
     public func stop() {
+        cancelActiveCrossfade()
+        cancelAntiPopFade()
         player?.stop()
         player = nil
         isPlaying = false
         currentTime = 0
         duration = 0
         currentTrack = nil
+        resetPlaySession(for: nil)
         stopTimer()
     }
 
-    private func loadAndPlayCurrent() {
+    private func resetPlaySession(for track: Track?) {
+        currentSessionTrackID = track?.id
+        currentSessionListenedSeconds = 0
+        currentSessionRecordedPlay = false
+        lastTickWallTime = nil
+    }
+
+    private func recordCurrentPlayIfNeeded(force: Bool = false) {
+        guard !currentSessionRecordedPlay,
+              let track = currentTrack,
+              track.id == currentSessionTrackID else { return }
+
+        let effectiveDuration = duration > 0 ? duration : track.duration
+        let threshold: TimeInterval = effectiveDuration > 0
+            ? min(30.0, max(5.0, effectiveDuration * 0.5))
+            : 15.0
+
+        if force || currentSessionListenedSeconds >= threshold {
+            currentSessionRecordedPlay = true
+            onTrackPlayed?(track)
+        }
+    }
+
+    private func nextQueueIndexForAutoAdvance() -> Int? {
+        guard !queue.isEmpty else { return nil }
+        if repeatMode == .one {
+            return currentIndex
+        }
+        if currentIndex + 1 < queue.count {
+            return currentIndex + 1
+        }
+        if repeatMode == .all {
+            return 0
+        }
+        return nil
+    }
+
+    private func applyCurrentVolumes() {
+        let master: Float = isMuted ? 0 : Float(volume)
+        if isCrossfading, activeCrossfadeDuration > 0 {
+            let progress = min(1.0, crossfadeElapsed / activeCrossfadeDuration)
+            let gains = Self.equalPowerGains(progress: progress)
+            fadingOutPlayer?.volume = master * Float(gains.outgoing)
+            player?.volume = master * Float(gains.incoming)
+        } else {
+            player?.volume = master
+        }
+    }
+
+    /// Short sample-accurate fade applied on manual/non-crossfade track switches to prevent DAC click/pop artifacts.
+    public static let antiPopFadeDuration: TimeInterval = 0.20
+
+    private var antiPopFadingPlayer: AVAudioPlayer?
+    private var antiPopCleanupTask: Task<Void, Never>?
+
+    private func fadeOutAntiPop(_ outgoing: AVAudioPlayer) {
+        antiPopCleanupTask?.cancel()
+        antiPopFadingPlayer?.delegate = nil
+        antiPopFadingPlayer?.stop()
+
+        outgoing.delegate = nil
+        antiPopFadingPlayer = outgoing
+        outgoing.setVolume(0, fadeDuration: Self.antiPopFadeDuration)
+        antiPopCleanupTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(230))
+            guard !Task.isCancelled, let self else { return }
+            self.antiPopFadingPlayer?.stop()
+            self.antiPopFadingPlayer = nil
+        }
+    }
+
+    private func cancelAntiPopFade() {
+        antiPopCleanupTask?.cancel()
+        antiPopCleanupTask = nil
+        antiPopFadingPlayer?.delegate = nil
+        antiPopFadingPlayer?.stop()
+        antiPopFadingPlayer = nil
+    }
+
+    private func cancelActiveCrossfade() {
+        fadingOutPlayer?.delegate = nil
+        fadingOutPlayer?.stop()
+        fadingOutPlayer = nil
+        isCrossfading = false
+        crossfadeElapsed = 0
+        activeCrossfadeDuration = 0
+        player?.volume = isMuted ? 0 : Float(volume)
+    }
+
+    private func loadAndPlayCurrent(crossfadeSeconds: TimeInterval? = nil) {
         guard currentIndex >= 0 && currentIndex < queue.count else { return }
         let track = queue[currentIndex]
-        currentTrack = track
-        playbackError = nil
 
         let url = URL(fileURLWithPath: track.filePath)
         guard FileManager.default.fileExists(atPath: url.path) else {
+            cancelActiveCrossfade()
+            if let outgoing = player, outgoing.isPlaying {
+                fadeOutAntiPop(outgoing)
+            } else {
+                player?.stop()
+            }
+            player = nil
+            currentTrack = track
             isPlaying = false
             playbackError = "File offline (source disconnected): \(track.fileName)"
             return
         }
 
         do {
-            player?.stop()
             let newPlayer = try AVAudioPlayer(contentsOf: url)
             newPlayer.delegate = self
             newPlayer.isMeteringEnabled = true
-            newPlayer.volume = isMuted ? 0 : Float(volume)
             newPlayer.prepareToPlay()
-            player = newPlayer
+
+            let canCrossfade: Bool = {
+                guard let fade = crossfadeSeconds, fade >= 0.4,
+                      let outgoing = self.player, outgoing.isPlaying else { return false }
+                return true
+            }()
+
+            let master: Float = isMuted ? 0 : Float(volume)
+            var useAntiPopFadeIn = false
+
+            if canCrossfade, let fade = crossfadeSeconds, let outgoing = self.player {
+                // Stop any older lingering fade-out deck before promoting current deck to outgoing
+                cancelAntiPopFade()
+                fadingOutPlayer?.delegate = nil
+                fadingOutPlayer?.stop()
+
+                outgoing.delegate = nil
+                fadingOutPlayer = outgoing
+                crossfadeElapsed = 0
+                activeCrossfadeDuration = fade
+                isCrossfading = true
+
+                newPlayer.volume = 0
+                player = newPlayer
+            } else {
+                cancelActiveCrossfade()
+                if let outgoing = self.player, outgoing.isPlaying {
+                    // Quick 0.20s anti-pop fade-out on outgoing track + 0.20s fade-in on incoming track
+                    fadeOutAntiPop(outgoing)
+                    newPlayer.volume = 0
+                    useAntiPopFadeIn = true
+                } else {
+                    player?.delegate = nil
+                    player?.stop()
+                    newPlayer.volume = 0
+                    useAntiPopFadeIn = true
+                }
+                player = newPlayer
+            }
+
+            currentTrack = track
+            playbackError = nil
             duration = newPlayer.duration > 0 ? newPlayer.duration : track.duration
             currentTime = 0
+            resetPlaySession(for: track)
             if newPlayer.play() {
                 isPlaying = true
+                if useAntiPopFadeIn {
+                    let fadeInDuration: TimeInterval = (antiPopFadingPlayer != nil) ? Self.antiPopFadeDuration : 0.04
+                    newPlayer.setVolume(master, fadeDuration: fadeInDuration)
+                } else {
+                    applyCurrentVolumes()
+                }
                 startTimer()
             } else {
+                cancelActiveCrossfade()
                 isPlaying = false
                 playbackError = "Unable to start playback for \(track.format.displayBadge)"
             }
         } catch {
+            cancelActiveCrossfade()
+            player?.stop()
             player = nil
+            currentTrack = track
             isPlaying = false
             duration = track.duration
             currentTime = 0
@@ -271,6 +479,23 @@ public final class AudioPlayerEngine: NSObject, AVAudioPlayerDelegate {
             } else {
                 playbackError = "Playback error: \(error.localizedDescription)"
             }
+        }
+    }
+
+    private func triggerAutoCrossfadeIfNeeded(currentPlayer: AVAudioPlayer) {
+        guard crossfadeEnabled, !isCrossfading else { return }
+        guard let nextIdx = nextQueueIndexForAutoAdvance() else { return }
+        let total = currentPlayer.duration
+        let effectiveFade = Self.effectiveCrossfadeDuration(configured: crossfadeDuration, trackDuration: total)
+        guard effectiveFade >= 0.8 else { return }
+
+        let remaining = total - currentPlayer.currentTime
+        if remaining <= effectiveFade && remaining > 0.08 {
+            // Ensure outgoing track counts as played since it reached the crossfade tail
+            recordCurrentPlayIfNeeded(force: true)
+            let actualFade = max(0.5, min(effectiveFade, remaining))
+            currentIndex = nextIdx
+            loadAndPlayCurrent(crossfadeSeconds: actualFade)
         }
     }
 
@@ -291,11 +516,39 @@ public final class AudioPlayerEngine: NSObject, AVAudioPlayerDelegate {
 
     private func startTimer() {
         stopTimer()
+        lastTickWallTime = Date()
         progressTimer = Timer.scheduledTimer(withTimeInterval: 0.06, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self, let player = self.player, player.isPlaying else { return }
-                self.currentTime = player.currentTime
-                self.sampleMeters(from: player)
+                let now = Date()
+                var delta: TimeInterval = 0
+                if let last = self.lastTickWallTime {
+                    delta = now.timeIntervalSince(last)
+                    if delta > 0 && delta < 1.5 {
+                        self.currentSessionListenedSeconds += delta
+                        self.recordCurrentPlayIfNeeded()
+                    } else {
+                        delta = 0
+                    }
+                }
+                self.lastTickWallTime = now
+
+                // Step equal-power crossfade envelope if active
+                if self.isCrossfading && delta > 0 {
+                    self.crossfadeElapsed += delta
+                    if self.crossfadeElapsed >= self.activeCrossfadeDuration || self.fadingOutPlayer == nil {
+                        self.cancelActiveCrossfade()
+                    } else {
+                        self.applyCurrentVolumes()
+                    }
+                } else {
+                    self.triggerAutoCrossfadeIfNeeded(currentPlayer: player)
+                }
+
+                if let active = self.player {
+                    self.currentTime = active.currentTime
+                    self.sampleMeters(from: active)
+                }
             }
         }
     }
@@ -349,11 +602,18 @@ public final class AudioPlayerEngine: NSObject, AVAudioPlayerDelegate {
     private func stopTimer() {
         progressTimer?.invalidate()
         progressTimer = nil
+        lastTickWallTime = nil
     }
 
-    nonisolated public func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+    nonisolated public func audioPlayerDidFinishPlaying(_ finishedPlayer: AVAudioPlayer, successfully flag: Bool) {
+        let finishedID = ObjectIdentifier(finishedPlayer)
         Task { @MainActor [weak self] in
             guard let self else { return }
+            // Ignore completion callbacks from stale or outgoing crossfade decks
+            guard let active = self.player, ObjectIdentifier(active) == finishedID else { return }
+            if flag {
+                self.recordCurrentPlayIfNeeded(force: true)
+            }
             self.nextTrack()
         }
     }

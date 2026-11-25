@@ -57,12 +57,25 @@ public actor PodcastService {
     public func searchPodcasts(
         query: String,
         directory: PodcastDirectory = .all,
+        category: PodcastBrowseCategory? = nil,
         limit: Int = 25
     ) async throws -> [PodcastSearchResult] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
+            if let category {
+                return try await browseCategory(category, directory: directory)
+            }
             return directory == .curated ? Self.curatedFeaturedShows : []
         }
+
+        // If the user explicitly picked a genre chip, OR typed a genre name directly (e.g. "true crime", "sports"),
+        // apply Apple's official genreId & gPodder tag search alongside regular keyword search!
+        let activeGenre: PodcastBrowseCategory? = {
+            if let category, category != .featured, category != .topCharts {
+                return category
+            }
+            return PodcastBrowseCategory.matchingGenre(for: trimmed)
+        }()
 
         switch directory {
         case .curated:
@@ -73,15 +86,69 @@ public actor PodcastService {
                     || ($0.genre?.lowercased().contains(q) ?? false)
             }
         case .apple:
+            if let genre = activeGenre {
+                if category != nil && category != .featured && category != .topCharts {
+                    // Explicit genre filter + search term inside that genre
+                    return try await searchApplePodcasts(
+                        term: trimmed,
+                        country: genre.countryCode,
+                        genreID: genre.appleGenreID,
+                        limit: limit
+                    )
+                } else {
+                    // User typed a genre name: combine genreId browse + direct term search
+                    async let byGenre: [PodcastSearchResult] = (try? await searchApplePodcasts(
+                        term: genre.defaultBrowseTerm,
+                        country: genre.countryCode,
+                        genreID: genre.appleGenreID,
+                        limit: limit
+                    )) ?? []
+                    async let byTerm: [PodcastSearchResult] = (try? await searchApplePodcasts(
+                        term: trimmed,
+                        country: genre.countryCode,
+                        genreID: nil,
+                        limit: limit
+                    )) ?? []
+                    return mergeDeduplicated((await byGenre) + (await byTerm))
+                }
+            }
             return try await searchApplePodcasts(term: trimmed, limit: limit)
         case .gpodder:
+            if let tag = activeGenre?.gpodderTag {
+                async let byTag: [PodcastSearchResult] = (try? await fetchGPodderTag(tag: tag, limit: limit)) ?? []
+                async let byQuery: [PodcastSearchResult] = (try? await searchGPodder(term: trimmed, limit: limit)) ?? []
+                return mergeDeduplicated((await byQuery) + (await byTag))
+            }
             return try await searchGPodder(term: trimmed, limit: limit)
         case .all:
-            async let appleTask: [PodcastSearchResult] = (try? await searchApplePodcasts(term: trimmed, limit: limit)) ?? []
+            let appleGenreID = activeGenre?.appleGenreID
+            let country = activeGenre?.countryCode ?? "US"
+            let gpodTag = activeGenre?.gpodderTag
+            async let applePrimary: [PodcastSearchResult] = (try? await searchApplePodcasts(
+                term: trimmed,
+                country: country,
+                genreID: appleGenreID,
+                limit: limit
+            )) ?? []
+            async let appleGenreBrowse: [PodcastSearchResult] = {
+                if let genre = activeGenre, category == nil {
+                    return (try? await searchApplePodcasts(
+                        term: genre.defaultBrowseTerm,
+                        country: genre.countryCode,
+                        genreID: genre.appleGenreID,
+                        limit: 18
+                    )) ?? []
+                }
+                return []
+            }()
             async let gpodderTask: [PodcastSearchResult] = (try? await searchGPodder(term: trimmed, limit: limit)) ?? []
-            let appleResults = await appleTask
-            let gpodderResults = await gpodderTask
-            return mergeDeduplicated(appleResults + gpodderResults)
+            async let gpodderTagTask: [PodcastSearchResult] = {
+                if let tag = gpodTag {
+                    return (try? await fetchGPodderTag(tag: tag, limit: 15)) ?? []
+                }
+                return []
+            }()
+            return mergeDeduplicated((await applePrimary) + (await appleGenreBrowse) + (await gpodderTask) + (await gpodderTagTask))
         }
     }
 
@@ -91,41 +158,77 @@ public actor PodcastService {
             return Self.curatedFeaturedShows
         case .topCharts:
             async let gpodTop: [PodcastSearchResult] = (try? await fetchGPodderTop(limit: 20)) ?? []
-            async let appleTop: [PodcastSearchResult] = (try? await searchApplePodcasts(term: "podcast", limit: 15)) ?? []
+            async let appleTop: [PodcastSearchResult] = (try? await searchApplePodcasts(term: "podcast", limit: 20)) ?? []
             if directory == .gpodder { return await gpodTop }
             if directory == .apple { return await appleTop }
-            return mergeDeduplicated((await gpodTop) + (await appleTop))
-        case .technology:
-            return try await searchPodcasts(query: "technology software hardware", directory: directory, limit: 20)
-        case .musicAudio:
-            return try await searchPodcasts(query: "music audiophile hi-fi vinyl", directory: directory, limit: 20)
-        case .science:
-            return try await searchPodcasts(query: "science space physics", directory: directory, limit: 20)
-        case .history:
-            return try await searchPodcasts(query: "history documentary", directory: directory, limit: 20)
-        case .comedy:
-            return try await searchPodcasts(query: "comedy", directory: directory, limit: 20)
-        case .trueCrime:
-            return try await searchPodcasts(query: "true crime investigative", directory: directory, limit: 20)
+            return mergeDeduplicated((await appleTop) + (await gpodTop))
         case .nordic:
-            return try await searchApplePodcasts(term: "NRK", country: "NO", limit: 20)
+            async let nrk: [PodcastSearchResult] = (try? await searchApplePodcasts(term: "NRK", country: "NO", limit: 18)) ?? []
+            async let norwegian: [PodcastSearchResult] = (try? await searchApplePodcasts(term: "podkast", country: "NO", limit: 18)) ?? []
+            return mergeDeduplicated((await nrk) + (await norwegian))
+        default:
+            switch directory {
+            case .curated:
+                let key = category.defaultBrowseTerm.lowercased()
+                return Self.curatedFeaturedShows.filter {
+                    ($0.genre?.lowercased().contains(key) ?? false)
+                        || $0.title.lowercased().contains(key)
+                }
+            case .apple:
+                return try await searchApplePodcasts(
+                    term: category.defaultBrowseTerm,
+                    country: category.countryCode,
+                    genreID: category.appleGenreID,
+                    limit: 25
+                )
+            case .gpodder:
+                if let tag = category.gpodderTag {
+                    let tagged = (try? await fetchGPodderTag(tag: tag, limit: 20)) ?? []
+                    if !tagged.isEmpty { return tagged }
+                }
+                return try await searchGPodder(term: category.defaultBrowseTerm, limit: 20)
+            case .all:
+                async let appleTask: [PodcastSearchResult] = (try? await searchApplePodcasts(
+                    term: category.defaultBrowseTerm,
+                    country: category.countryCode,
+                    genreID: category.appleGenreID,
+                    limit: 25
+                )) ?? []
+                async let gpodTask: [PodcastSearchResult] = {
+                    if let tag = category.gpodderTag {
+                        let tagged = (try? await fetchGPodderTag(tag: tag, limit: 15)) ?? []
+                        if !tagged.isEmpty { return tagged }
+                    }
+                    return (try? await searchGPodder(term: category.defaultBrowseTerm, limit: 15)) ?? []
+                }()
+                return mergeDeduplicated((await appleTask) + (await gpodTask))
+            }
         }
     }
 
-    private func searchApplePodcasts(term: String, country: String = "US", limit: Int = 25) async throws -> [PodcastSearchResult] {
+    private func searchApplePodcasts(
+        term: String,
+        country: String = "US",
+        genreID: Int? = nil,
+        limit: Int = 25
+    ) async throws -> [PodcastSearchResult] {
         var comps = URLComponents(string: "https://itunes.apple.com/search")!
-        comps.queryItems = [
+        var items = [
             URLQueryItem(name: "media", value: "podcast"),
             URLQueryItem(name: "entity", value: "podcast"),
             URLQueryItem(name: "country", value: country),
             URLQueryItem(name: "limit", value: String(limit)),
             URLQueryItem(name: "term", value: term)
         ]
+        if let genreID {
+            items.append(URLQueryItem(name: "genreId", value: String(genreID)))
+        }
+        comps.queryItems = items
         guard let url = comps.url else { return [] }
 
         var req = URLRequest(url: url)
         req.timeoutInterval = 15
-        req.setValue("EchoMacOS/1.2", forHTTPHeaderField: "User-Agent")
+        req.setValue("EchoMacOS/1.3", forHTTPHeaderField: "User-Agent")
 
         let (data, response) = try await URLSession.shared.data(for: req)
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
@@ -153,6 +256,12 @@ public actor PodcastService {
         var comps = URLComponents(string: "https://gpodder.net/search.json")!
         comps.queryItems = [URLQueryItem(name: "q", value: term)]
         guard let url = comps.url else { return [] }
+        return try await fetchGPodderItems(from: url, limit: limit)
+    }
+
+    private func fetchGPodderTag(tag: String, limit: Int = 20) async throws -> [PodcastSearchResult] {
+        let safeTag = tag.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? tag
+        guard let url = URL(string: "https://gpodder.net/api/2/tag/\(safeTag)/\(limit).json") else { return [] }
         return try await fetchGPodderItems(from: url, limit: limit)
     }
 
