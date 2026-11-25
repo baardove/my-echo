@@ -10,13 +10,13 @@ This guide walks through installing the prebuilt **macOS release**, building loc
 
 ### Step 1 — Download & Unzip
 1. Go to the [**GitHub Releases**](https://github.com/baardove/my-echo/releases/latest) page.
-2. Download the latest macOS archive (for example, `My-Echo-v1.3.0-macOS-arm64.zip`) and optionally its `.sha256` checksum file.
+2. Download the latest macOS archive (for example, `My-Echo-v1.4.0-macOS-arm64.zip`) and optionally its `.sha256` checksum file.
 3. *(Optional)* Verify the download integrity in Terminal:
    ```bash
    cd ~/Downloads
-   shasum -a 256 -c My-Echo-v1.3.0-macOS-arm64.zip.sha256
+   shasum -a 256 -c My-Echo-v1.4.0-macOS-arm64.zip.sha256
    ```
-   You should see `My-Echo-v1.3.0-macOS-arm64.zip: OK`.
+   You should see `My-Echo-v1.4.0-macOS-arm64.zip: OK`.
 4. Double-click the `.zip` file to extract **`My Echo.app`**, then drag **`My Echo.app`** into your **`/Applications`** folder.
 
 ---

@@ -135,22 +135,22 @@ Turn your Mac and entire local/NAS music collection into a collaborative **LAN P
 
 Prebuilt macOS (Apple Silicon) `.app` bundles are published on the [**GitHub Releases**](https://github.com/baardove/my-echo/releases) page.
 
-### Latest Release — [`v1.3.0`](https://github.com/baardove/my-echo/releases/tag/v1.3.0)
+### Latest Release — [`v1.4.0`](https://github.com/baardove/my-echo/releases/tag/v1.4.0)
 
-- **Download:** [`My-Echo-v1.3.0-macOS-arm64.zip`](https://github.com/baardove/my-echo/releases/download/v1.3.0/My-Echo-v1.3.0-macOS-arm64.zip) (4.4 MB, macOS 14+ Apple Silicon)
-- **SHA-256 Checksum:** [`My-Echo-v1.3.0-macOS-arm64.zip.sha256`](https://github.com/baardove/my-echo/releases/download/v1.3.0/My-Echo-v1.3.0-macOS-arm64.zip.sha256)
+- **Download:** [`My-Echo-v1.4.0-macOS-arm64.zip`](https://github.com/baardove/my-echo/releases/download/v1.4.0/My-Echo-v1.4.0-macOS-arm64.zip) (5.4 MB, macOS 14+ Apple Silicon)
+- **SHA-256 Checksum:** [`My-Echo-v1.4.0-macOS-arm64.zip.sha256`](https://github.com/baardove/my-echo/releases/download/v1.4.0/My-Echo-v1.4.0-macOS-arm64.zip.sha256)
   ```text
-  b74c682055fb5743ae5a21963b409123588dd49fb3ed6afd44c5910325b12d8c  My-Echo-v1.3.0-macOS-arm64.zip
+  f5fb02cd526ac3364601cbe7bbf3cdecb64d7ecae04a6a17870733932aa5aa89  My-Echo-v1.4.0-macOS-arm64.zip
   ```
 
 #### Quick Install
 > 📖 **Need step-by-step help installing without an App Store / Apple Developer certificate (including Gatekeeper & iPhone/iPad sideloading)?** See [**HOW-TO-INSTALL.md**](HOW-TO-INSTALL.md).
 
-1. Download and unzip `My-Echo-v1.3.0-macOS-arm64.zip`.
+1. Download and unzip `My-Echo-v1.4.0-macOS-arm64.zip`.
 2. Drag **`My Echo.app`** into `/Applications`.
 3. Verify checksum (optional):
    ```bash
-   shasum -a 256 -c My-Echo-v1.3.0-macOS-arm64.zip.sha256
+   shasum -a 256 -c My-Echo-v1.4.0-macOS-arm64.zip.sha256
    ```
 4. Because GitHub releases are not notarized with a paid Apple Developer ID, if macOS Gatekeeper warns on first open, clear the quarantine attribute once:
    ```bash
@@ -159,6 +159,7 @@ Prebuilt macOS (Apple Silicon) `.app` bundles are published on the [**GitHub Rel
    *(Or build locally from source in ~20 seconds with `./build-app.sh`.)*
 
 #### Release History
+- **[`v1.4.0`](https://github.com/baardove/my-echo/releases/tag/v1.4.0)** — **Party Mode Jukebox (`⌘⇧P`), 1–5 Star Ratings, Multi-Field Search & Audio Output UX**: embedded local LAN HTTP/HTTPS Party Mode web server with instant QR code, locked `Partymode` playlist with live `HH:mm` schedule, zero-install desktop & mobile guest web UI (with flat SVG icons), **broadcast-processed DJ Voice Intros** (EQ/compression/normalization + smooth 5s music ducking), **Listen-Along** live streaming, real-time **Party Chat**, active guest presence, and **Settings** lightbox; **1–5 star track & album ratings** persisted in SQLite with **Highest Rated** sorting and top-bar star filter; structured **multi-field search** (`artist:`, `track:`, `album:`, `genre:`, `year:`, `format:`, `rating:4+`, `+required`, `-excluded`); **CoreAudio output device picker**, **call/mic auto-pause & auto-resume**, macOS **media key** integration, expanded **Lidarr** discography search & ranking, and **iOS** editorial lightbox + call interruption handling.
 - **[`v1.3.0`](https://github.com/baardove/my-echo/releases/tag/v1.3.0)** — Major studio, sync & companion release: **Universal iPhone & iPad companion app** (`iOS/`) with Bonjour Wi-Fi Auto-Sync, Navidrome streaming, and podcast search/sync-back; **Dark Neon-Green UI refresh** with AppKit-proof dropdowns, pickers, segmented controls, and `P`/`S` card badges; **Album Artwork Lightbox** with responsive right-side Album & Artist info panels and local SQLite editorial caching; **Auto-Scan schedule** (`Off` to `Every week`) with quiet zero-change indexing; **0.20s anti-pop song-switch fade**; **DiskArbitration/IOKit `IN PLAYER` vs `CARD READER` detection**; unified **Various Artists / majority-artist album grouping & fast in-place sync relocation**; **Lidarr** downloads integration; **18 podcast genres**; and major macOS performance optimizations ($O(1)$ selection caches + off-main-actor sync planning).
 - **[`v1.2.0`](https://github.com/baardove/my-echo/releases/tag/v1.2.0)** — Initial public macOS release: multi-source local & NAS indexing, pure-Swift metadata/artwork optimizer (`ARTIST/ALBUM/TRACK` + Baseline RGB JPEG + ID3v2.3 + `.lrc` + `._*` cleanup), **FiiO Echo / Nano / Disc / Android DAP / Generic** profiles, Single & Multi-Destination sync memory, drag-and-drop playlists, multi-directory podcasts with per-show episode rotation, freely height-resizable Winamp Mini Player, `diskutil` Clean & Eject, and 5 live themes (including **Frosted Glass**).
 
