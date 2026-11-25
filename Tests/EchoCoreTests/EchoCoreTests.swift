@@ -1201,6 +1201,590 @@ final class EchoCoreTests: XCTestCase {
         XCTAssertTrue(roundTripArtist.isStale)
     }
 
+    // MARK: - Party Mode Server, Track Search & Queue Locking Tests
+
+    func testPartyTrackCatalogSearchAcrossTrackArtistAndAlbum() {
+        let src = UUID()
+        let t1 = Track(
+            id: "t1", sourceID: src, filePath: "/m/around.flac", fileName: "around.flac",
+            fileSize: 1000, modifiedAt: Date(), format: .flac,
+            title: "Around the World", artist: "Daft Punk", albumArtist: "Daft Punk", album: "Homework", duration: 429
+        )
+        let t2 = Track(
+            id: "t2", sourceID: src, filePath: "/m/bad.flac", fileName: "bad.flac",
+            fileSize: 1000, modifiedAt: Date(), format: .flac,
+            title: "Bad", artist: "Michael Jackson", albumArtist: "Michael Jackson", album: "Bad", duration: 247
+        )
+        let t3 = Track(
+            id: "t3", sourceID: src, filePath: "/m/billie.flac", fileName: "billie.flac",
+            fileSize: 1000, modifiedAt: Date(), format: .flac,
+            title: "Billie Jean", artist: "Michael Jackson", albumArtist: "Michael Jackson", album: "Thriller", duration: 294
+        )
+        let t4 = Track(
+            id: "t4", sourceID: src, filePath: "/m/world.flac", fileName: "world.flac",
+            fileSize: 1000, modifiedAt: Date(), format: .flac,
+            title: "Digital Love", artist: "Daft Punk", albumArtist: "Daft Punk", album: "Discovery", duration: 298
+        )
+
+        let catalog = PartyTrackCatalog(tracks: [t1, t2, t3, t4])
+
+        // Multi-token search across artist + track title
+        let multi = catalog.search(query: "daft around", scope: .all)
+        XCTAssertEqual(multi.tracks.map(\.id), ["t1"])
+
+        // Artist scope finds both Michael Jackson tracks
+        let byArtist = catalog.search(query: "michael jackson", scope: .artist)
+        XCTAssertEqual(Set(byArtist.tracks.map(\.id)), Set(["t2", "t3"]))
+
+        // Album scope finds only Thriller track
+        let byAlbum = catalog.search(query: "thriller", scope: .album)
+        XCTAssertEqual(byAlbum.tracks.map(\.id), ["t3"])
+
+        // Track scope only matches title, not album
+        let byTrackOnly = catalog.search(query: "discovery", scope: .track)
+        XCTAssertTrue(byTrackOnly.tracks.isEmpty)
+
+        // Track-first ranking: exact track title "Bad" ranks first, marks upNext status
+        let exact = catalog.search(query: "bad", scope: .all, playlistTrackIDs: ["t2"], upNextTrackIDs: ["t2"])
+        XCTAssertEqual(exact.tracks.first?.id, "t2")
+        XCTAssertEqual(exact.tracks.first?.inUpNext, true)
+
+        // Empty query pagination
+        let page1 = catalog.search(query: "", scope: .all, sort: "title", offset: 0, limit: 2)
+        XCTAssertEqual(page1.tracks.count, 2)
+        XCTAssertTrue(page1.hasMore)
+        XCTAssertEqual(page1.totalMatches, 4)
+    }
+
+    func testPartyModeServerRandomPortAndGuestAddFlow() async throws {
+        let tmp = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let artCache = ArtworkCache(cacheDirectory: tmp.appendingPathComponent("Art"))
+        let png = try XCTUnwrap(makeSyntheticPNG(width: 200, height: 200))
+        let artHash = try XCTUnwrap(artCache.store(imageData: png))
+
+        let audioFile = tmp.appendingPathComponent("one.mp3")
+        let fakeAudioBytes = Data("ID3-SYNTHETIC-STREAM-PAYLOAD-1234567890".utf8)
+        try fakeAudioBytes.write(to: audioFile)
+
+        let src = UUID()
+        let track = Track(
+            id: "party-t1", sourceID: src, filePath: audioFile.path, fileName: "one.mp3",
+            fileSize: Int64(fakeAudioBytes.count), modifiedAt: Date(), format: .mp3,
+            title: "One More Time", artist: "Daft Punk", albumArtist: "Daft Punk", album: "Discovery",
+            duration: 320, artworkHash: artHash
+        )
+
+        let server = PartyModeServer(artworkCache: artCache)
+        server.updateLibrary(tracks: [track])
+        server.updatePlaylistState(PartyPlaylistState(playlistName: "Partymode", serverName: "TestMac", libraryTotalCount: 1))
+
+        let readyExp = expectation(description: "PartyModeServer bound random port")
+        let portBox = LockedBox<UInt16>(0)
+        server.onStatusChanged = { running, port, _, _ in
+            if running && port > 0 && portBox.value == 0 {
+                portBox.value = port
+                readyExp.fulfill()
+            }
+        }
+
+        let addedBox = LockedBox<(String, String?, String?)?>(nil)
+        server.onAddTrack = { trackID, guestName, guestID in
+            addedBox.value = (trackID, guestName, guestID)
+            let item = PartyTrackItem(from: track, inPlaylist: true, inUpNext: true)
+            let updatedState = PartyPlaylistState(
+                playlistName: "Partymode",
+                serverName: "TestMac",
+                isPlaying: true,
+                currentTrackID: trackID,
+                currentIndex: 0,
+                libraryTotalCount: 1,
+                upNextCount: 0,
+                revision: 2,
+                tracks: [PartyQueueEntry(position: 0, track: item, isCurrent: true, isPlayed: false, addedBy: guestName)]
+            )
+            server.updatePlaylistState(updatedState)
+            return PartyAddTrackResponse(ok: true, alreadyQueued: false, message: "Added '\(track.title)' to Partymode", position: 0, track: item, state: updatedState)
+        }
+
+        let renamedBox = LockedBox<(String, String?)?>(nil)
+        server.onRenameGuest = { guestID, newName in
+            renamedBox.value = (guestID, newName)
+            let display = newName ?? "Guest"
+            let item = PartyTrackItem(from: track, inPlaylist: true, inUpNext: true)
+            let updatedState = PartyPlaylistState(
+                playlistName: "Partymode",
+                serverName: "TestMac",
+                isPlaying: true,
+                currentTrackID: track.id,
+                currentIndex: 0,
+                libraryTotalCount: 1,
+                upNextCount: 0,
+                revision: 3,
+                tracks: [PartyQueueEntry(position: 0, track: item, isCurrent: true, isPlayed: false, addedBy: display)]
+            )
+            server.updatePlaylistState(updatedState)
+            return PartyRenameGuestResponse(ok: true, updatedCount: 1, guestName: display, state: updatedState)
+        }
+
+        let chatBox = LockedBox<(String?, String?, String)?>(nil)
+        server.onSendChatMessage = { guestID, guestName, text in
+            chatBox.value = (guestID, guestName, text)
+            let msg = PartyChatMessage(guestID: guestID, senderName: guestName ?? "Guest", isHost: false, text: text)
+            let updatedState = PartyPlaylistState(
+                playlistName: "Partymode",
+                serverName: "TestMac",
+                isPlaying: true,
+                currentTrackID: track.id,
+                currentIndex: 0,
+                libraryTotalCount: 1,
+                upNextCount: 0,
+                chatEnabled: true,
+                revision: 4,
+                tracks: [],
+                guests: server.snapshotGuests(),
+                chatMessages: [msg]
+            )
+            server.updatePlaylistState(updatedState)
+            return PartyChatSendResponse(ok: true, chatMessage: msg, state: updatedState)
+        }
+
+        server.start()
+        await fulfillment(of: [readyExp], timeout: 5.0)
+        defer { server.stop() }
+
+        let port = portBox.value
+        XCTAssertGreaterThan(port, 0)
+
+        // 1. Verify Guest HTML UI loads at /
+        let (htmlData, htmlResp) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/")!)
+        XCTAssertEqual((htmlResp as? HTTPURLResponse)?.statusCode, 200)
+        let html = String(data: htmlData, encoding: .utf8) ?? ""
+        XCTAssertTrue(html.contains("PARTYMODE"))
+        XCTAssertTrue(html.contains("/api/party/tracks"))
+
+        // 2. Verify track search endpoint
+        let (searchData, searchResp) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/api/party/tracks?q=daft&scope=all")!)
+        XCTAssertEqual((searchResp as? HTTPURLResponse)?.statusCode, 200)
+        let searchResult = try JSONDecoder().decode(PartyTrackSearchResponse.self, from: searchData)
+        XCTAssertEqual(searchResult.tracks.map(\.id), ["party-t1"])
+
+        // 3. Verify POST /api/party/add
+        var addReq = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/party/add")!)
+        addReq.httpMethod = "POST"
+        addReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        addReq.httpBody = try JSONEncoder().encode(PartyAddTrackRequest(trackId: "party-t1", guestName: "  Alex  ", guestId: "guest-abc-123"))
+        let (addData, addResp) = try await URLSession.shared.data(for: addReq)
+        XCTAssertEqual((addResp as? HTTPURLResponse)?.statusCode, 200)
+        let addDecoder = JSONDecoder()
+        addDecoder.dateDecodingStrategy = .iso8601
+        let addDecoded = try addDecoder.decode(PartyAddTrackResponse.self, from: addData)
+        XCTAssertTrue(addDecoded.ok)
+        XCTAssertEqual(addedBox.value?.0, "party-t1")
+        XCTAssertEqual(addedBox.value?.1, "Alex")
+        XCTAssertEqual(addedBox.value?.2, "guest-abc-123")
+
+        // 3b. Verify POST /api/party/guest/rename updates guest's previous requests & presence
+        var renameReq = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/party/guest/rename")!)
+        renameReq.httpMethod = "POST"
+        renameReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        renameReq.httpBody = try JSONEncoder().encode(PartyRenameGuestRequest(guestId: "guest-abc-123", guestName: "DJ Alex"))
+        let (renameData, renameResp) = try await URLSession.shared.data(for: renameReq)
+        XCTAssertEqual((renameResp as? HTTPURLResponse)?.statusCode, 200)
+        let renameDecoded = try addDecoder.decode(PartyRenameGuestResponse.self, from: renameData)
+        XCTAssertTrue(renameDecoded.ok)
+        XCTAssertEqual(renameDecoded.updatedCount, 1)
+        XCTAssertEqual(renameDecoded.guestName, "DJ Alex")
+        XCTAssertEqual(renameDecoded.state?.tracks.first?.addedBy, "DJ Alex")
+        XCTAssertEqual(renamedBox.value?.0, "guest-abc-123")
+        XCTAssertEqual(renamedBox.value?.1, "DJ Alex")
+
+        // 3c. Verify guest presence heartbeat on /api/party/state & optional chat endpoint
+        let (stateData, stateResp) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/api/party/state?guestId=guest-second&guestName=Maya")!)
+        XCTAssertEqual((stateResp as? HTTPURLResponse)?.statusCode, 200)
+        let stateDecoded = try addDecoder.decode(PartyPlaylistState.self, from: stateData)
+        XCTAssertEqual(stateDecoded.guests.count, 2)
+        XCTAssertTrue(stateDecoded.guests.contains(where: { $0.id == "guest-abc-123" && $0.name == "DJ Alex" && $0.isActive }))
+        XCTAssertTrue(stateDecoded.guests.contains(where: { $0.id == "guest-second" && $0.name == "Maya" && $0.isActive }))
+
+        var chatReq = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/party/chat")!)
+        chatReq.httpMethod = "POST"
+        chatReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        chatReq.httpBody = try JSONEncoder().encode(PartyChatSendRequest(guestId: "guest-second", guestName: "Maya", text: "Great song!"))
+        let (chatData, chatResp) = try await URLSession.shared.data(for: chatReq)
+        XCTAssertEqual((chatResp as? HTTPURLResponse)?.statusCode, 200)
+        let chatDecoded = try addDecoder.decode(PartyChatSendResponse.self, from: chatData)
+        XCTAssertTrue(chatDecoded.ok)
+        XCTAssertEqual(chatDecoded.chatMessage?.text, "Great song!")
+        XCTAssertEqual(chatBox.value?.2, "Great song!")
+
+        // 4. Verify artwork endpoint serves cached JPEG (both thumbnail and ?full=1 full-resolution)
+        let (artData, artResp) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/api/party/artwork/\(artHash)")!)
+        XCTAssertEqual((artResp as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertFalse(artData.isEmpty)
+
+        let (fullArtData, fullArtResp) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/api/party/artwork/\(artHash)?full=1")!)
+        XCTAssertEqual((fullArtResp as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertFalse(fullArtData.isEmpty)
+
+        // 4a. Verify /api/party/track-info returns album + artist lightbox details
+        server.onFetchTrackInfo = { trackID in
+            PartyTrackInfoResponse(
+                trackId: trackID,
+                title: track.title,
+                artist: track.artist,
+                album: track.album,
+                year: 2001,
+                duration: track.duration,
+                format: "MP3",
+                artworkHash: artHash,
+                releaseDate: "2001-03-12",
+                label: "Virgin Records",
+                genres: ["Electronic", "House"],
+                albumSummary: "Second studio album by Daft Punk.",
+                albumTrackCount: 14,
+                artistSummary: "French electronic music duo formed in Paris.",
+                artistFans: 4_200_000,
+                localArtistAlbumCount: 2,
+                localArtistTrackCount: 24
+            )
+        }
+        let (infoData, infoResp) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/api/party/track-info?trackId=party-t1")!)
+        XCTAssertEqual((infoResp as? HTTPURLResponse)?.statusCode, 200)
+        let infoDecoded = try addDecoder.decode(PartyTrackInfoResponse.self, from: infoData)
+        XCTAssertEqual(infoDecoded.album, "Discovery")
+        XCTAssertEqual(infoDecoded.label, "Virgin Records")
+        XCTAssertEqual(infoDecoded.artistSummary, "French electronic music duo formed in Paris.")
+
+        // 4b. Verify optional remote listen-along audio stream respects streamingEnabled toggle & HTTP Range
+        var streamDisabledState = server.currentPlaylistState()
+        streamDisabledState.streamingEnabled = false
+        streamDisabledState.currentTrackID = "party-t1"
+        server.updatePlaylistState(streamDisabledState)
+        let (_, deniedStreamResp) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/api/party/stream/party-t1")!)
+        XCTAssertEqual((deniedStreamResp as? HTTPURLResponse)?.statusCode, 403)
+
+        var streamEnabledState = server.currentPlaylistState()
+        streamEnabledState.streamingEnabled = true
+        streamEnabledState.currentTrackID = "party-t1"
+        server.updatePlaylistState(streamEnabledState)
+
+        var rangeReq = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/party/stream/party-t1")!)
+        rangeReq.setValue("bytes=0-9", forHTTPHeaderField: "Range")
+        let (partialData, partialResp) = try await URLSession.shared.data(for: rangeReq)
+        XCTAssertEqual((partialResp as? HTTPURLResponse)?.statusCode, 206)
+        XCTAssertEqual(partialData, fakeAudioBytes.prefix(10))
+
+        // 4c. Verify guest voice intro upload (POST /api/party/intro) and deletion (DELETE /api/party/intro)
+        let uploadedIntroBox = LockedBox<(String, String?, String?, Int, String)?>(nil)
+        server.onUploadVoiceIntro = { trackID, guestID, guestName, data, ext in
+            uploadedIntroBox.value = (trackID, guestID, guestName, data.count, ext)
+            return PartyIntroUploadResponse(ok: true, message: "Voice intro saved (10s)", duration: 10.0, state: server.currentPlaylistState())
+        }
+        let deletedIntroBox = LockedBox<(String, String?)?>(nil)
+        server.onDeleteVoiceIntro = { trackID, guestID in
+            deletedIntroBox.value = (trackID, guestID)
+            return PartyIntroUploadResponse(ok: true, message: "Voice intro removed", duration: nil, state: server.currentPlaylistState())
+        }
+
+        let fakeWavData = Data("RIFF0000WAVEfmt-SYNTHETIC-INTRO-BYTES".utf8)
+        var introUploadReq = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/party/intro?trackId=party-t1&guestId=guest-abc-123&guestName=DJ%20Alex&ext=wav")!)
+        introUploadReq.httpMethod = "POST"
+        introUploadReq.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
+        introUploadReq.httpBody = fakeWavData
+        let (introUpData, introUpResp) = try await URLSession.shared.data(for: introUploadReq)
+        XCTAssertEqual((introUpResp as? HTTPURLResponse)?.statusCode, 200)
+        let introUpDecoded = try addDecoder.decode(PartyIntroUploadResponse.self, from: introUpData)
+        XCTAssertTrue(introUpDecoded.ok)
+        XCTAssertEqual(introUpDecoded.duration ?? 0, 10.0, accuracy: 0.01)
+        XCTAssertEqual(uploadedIntroBox.value?.0, "party-t1")
+        XCTAssertEqual(uploadedIntroBox.value?.1, "guest-abc-123")
+        XCTAssertEqual(uploadedIntroBox.value?.3, fakeWavData.count)
+        XCTAssertEqual(uploadedIntroBox.value?.4, "wav")
+
+        var introDeleteReq = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/party/intro?trackId=party-t1&guestId=guest-abc-123")!)
+        introDeleteReq.httpMethod = "DELETE"
+        let (introDelData, introDelResp) = try await URLSession.shared.data(for: introDeleteReq)
+        XCTAssertEqual((introDelResp as? HTTPURLResponse)?.statusCode, 200)
+        let introDelDecoded = try addDecoder.decode(PartyIntroUploadResponse.self, from: introDelData)
+        XCTAssertTrue(introDelDecoded.ok)
+        XCTAssertEqual(deletedIntroBox.value?.0, "party-t1")
+        XCTAssertEqual(deletedIntroBox.value?.1, "guest-abc-123")
+
+        // 5. Verify restarting on a specific custom port binds that exact port
+        let customTargetPort: UInt16 = port < 60_000 ? (port + 17) : (port - 17)
+        let customExp = expectation(description: "PartyModeServer bound custom port")
+        let customPortBox = LockedBox<UInt16>(0)
+        server.onStatusChanged = { running, boundPort, _, _ in
+            if running && boundPort == customTargetPort && customPortBox.value == 0 {
+                customPortBox.value = boundPort
+                customExp.fulfill()
+            }
+        }
+        server.restart(preferredPort: customTargetPort)
+        await fulfillment(of: [customExp], timeout: 5.0)
+        XCTAssertEqual(customPortBox.value, customTargetPort)
+        let (_, customStateResp) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(customTargetPort)/api/party/state")!)
+        XCTAssertEqual((customStateResp as? HTTPURLResponse)?.statusCode, 200)
+    }
+
+    @MainActor
+    func testAudioPlayerEngineQueueLockAndDynamicSync() {
+        let src = UUID()
+        let t1 = Track(id: "q1", sourceID: src, filePath: "/nonexistent/1.flac", fileName: "1.flac", fileSize: 1, modifiedAt: Date(), format: .flac, title: "One", artist: "A", albumArtist: "A", album: "Al")
+        let t2 = Track(id: "q2", sourceID: src, filePath: "/nonexistent/2.flac", fileName: "2.flac", fileSize: 1, modifiedAt: Date(), format: .flac, title: "Two", artist: "A", albumArtist: "A", album: "Al")
+        let t3 = Track(id: "q3", sourceID: src, filePath: "/nonexistent/3.flac", fileName: "3.flac", fileSize: 1, modifiedAt: Date(), format: .flac, title: "Three", artist: "B", albumArtist: "B", album: "Al2")
+
+        let engine = AudioPlayerEngine()
+        engine.syncLockedQueue(tracks: [t1, t2], autoStartIfIdle: false)
+        XCTAssertEqual(engine.queue.map(\.id), ["q1", "q2"])
+        XCTAssertEqual(engine.currentTrack?.id, "q1")
+        XCTAssertEqual(engine.currentIndex, 0)
+
+        // Lock queue and verify external play/add calls are intercepted instead of overwriting Partymode
+        var interceptedPlayID: String?
+        var interceptedAppend: (String, Bool)?
+        engine.isQueueLocked = true
+        engine.onLockedQueuePlayRequest = { tracks, idx in interceptedPlayID = tracks[idx].id }
+        engine.onLockedQueueAppendRequest = { track, playNext in interceptedAppend = (track.id, playNext) }
+
+        engine.play(tracks: [t3], startingAt: 0)
+        XCTAssertEqual(interceptedPlayID, "q3")
+        XCTAssertEqual(engine.queue.map(\.id), ["q1", "q2"])
+
+        engine.enqueueNext(t3)
+        XCTAssertEqual(interceptedAppend?.0, "q3")
+        XCTAssertEqual(interceptedAppend?.1, true)
+
+        // Dynamic sync appends t3 while preserving active track t1 at index 0
+        engine.syncLockedQueue(tracks: [t1, t2, t3], autoStartIfIdle: false)
+        XCTAssertEqual(engine.queue.map(\.id), ["q1", "q2", "q3"])
+        XCTAssertEqual(engine.currentTrack?.id, "q1")
+        XCTAssertEqual(engine.currentIndex, 0)
+    }
+
+    @MainActor
+    func testVoiceIntroDuckingAndFiveSecondOverlapTimeline() {
+        // 15s intro: 10s over faded outgoing song (40%), final 5s over faded incoming song (40%)
+        let full = AudioPlayerEngine.voiceIntroTimeline(introDuration: 15.0)
+        XCTAssertEqual(full.preRoll, 10.0, accuracy: 0.001)
+        XCTAssertEqual(full.overlap, 5.0, accuracy: 0.001)
+        XCTAssertEqual(full.duckGain, 0.40, accuracy: 0.001)
+
+        // Short 4s intro: entire 4s overlaps the incoming song at 40%, 0s pre-roll
+        let short = AudioPlayerEngine.voiceIntroTimeline(introDuration: 4.0)
+        XCTAssertEqual(short.preRoll, 0.0, accuracy: 0.001)
+        XCTAssertEqual(short.overlap, 4.0, accuracy: 0.001)
+        XCTAssertEqual(short.duckGain, 0.40, accuracy: 0.001)
+
+        // Zero duration
+        let zero = AudioPlayerEngine.voiceIntroTimeline(introDuration: 0.0)
+        XCTAssertEqual(zero.preRoll, 0.0, accuracy: 0.001)
+        XCTAssertEqual(zero.overlap, 0.0, accuracy: 0.001)
+    }
+
+    func testVoiceIntroAudioNormalizationRaisesQuietSpeechAndPreventsClipping() throws {
+        let sr = 22_050.0
+        let count = Int(sr * 1.5)
+
+        // 1. Quiet speech (~ -30 dBFS amplitude 0.03) with a DC offset should be boosted cleanly to ~targetActiveRMS
+        var quiet = (0..<count).map { i -> Float in
+            0.05 + 0.03 * sin(Float(2.0 * Double.pi * 440.0 * Double(i) / sr))
+        }
+        let boostGain = VoiceIntroAudioNormalizer.normalizeSamples(&quiet, sampleRate: sr)
+        XCTAssertGreaterThan(boostGain, 5.0)
+        let quietPeak = quiet.map { abs($0) }.max() ?? 0
+        XCTAssertLessThanOrEqual(quietPeak, VoiceIntroAudioNormalizer.peakCeiling + 0.002)
+        // Compute RMS over the middle second (outside edge fades)
+        let midQuiet = quiet[Int(sr * 0.25)..<Int(sr * 1.25)]
+        let quietRMS = sqrt(midQuiet.reduce(0.0) { $0 + Double($1 * $1) } / Double(midQuiet.count))
+        XCTAssertGreaterThan(quietRMS, 0.16)
+        XCTAssertLessThan(quietRMS, 0.28)
+
+        // 2. Loud / hot signal with sharp spikes must stay cleanly under -1 dBFS ceiling
+        var hot = (0..<count).map { i -> Float in
+            let spike: Float = (i % 4000 == 100) ? 1.0 : 0.0
+            return min(1.0, max(-1.0, 0.75 * sin(Float(2.0 * Double.pi * 300.0 * Double(i) / sr)) + spike))
+        }
+        let cutGain = VoiceIntroAudioNormalizer.normalizeSamples(&hot, sampleRate: sr)
+        XCTAssertLessThan(cutGain, 1.0)
+        let hotPeak = hot.map { abs($0) }.max() ?? 0
+        XCTAssertLessThanOrEqual(hotPeak, VoiceIntroAudioNormalizer.peakCeiling + 0.002)
+
+        // 3. Near-silence should NOT be boosted into loud hiss
+        var silence = [Float](repeating: 0.0001, count: count)
+        let silentGain = VoiceIntroAudioNormalizer.normalizeSamples(&silence, sampleRate: sr)
+        XCTAssertEqual(silentGain, 1.0, accuracy: 0.001)
+
+        // 4. Verify 95 Hz high-pass suppresses 35 Hz mic rumble relative to 1 kHz speech energy
+        var rumble = (0..<count).map { i -> Float in
+            0.25 * sin(Float(2.0 * Double.pi * 35.0 * Double(i) / sr))
+        }
+        var speech = (0..<count).map { i -> Float in
+            0.25 * sin(Float(2.0 * Double.pi * 3_200.0 * Double(i) / sr))
+        }
+        // Raw speech + rumble mix: after broadcast chain, 3.2 kHz presence should dominate and peaks stay <= ceiling
+        var mixed = zip(rumble, speech).map { $0 * 0.4 + $1 * 0.2 }
+        _ = VoiceIntroAudioNormalizer.normalizeSamples(&mixed, sampleRate: sr)
+        let mixedPeak = mixed.map { abs($0) }.max() ?? 0
+        XCTAssertLessThanOrEqual(mixedPeak, VoiceIntroAudioNormalizer.peakCeiling + 0.002)
+        // Silence rumble-only check ensures high-pass attenuates 35 Hz before normalization
+        _ = VoiceIntroAudioNormalizer.normalizeSamples(&rumble, sampleRate: sr)
+        _ = VoiceIntroAudioNormalizer.normalizeSamples(&speech, sampleRate: sr)
+        XCTAssertLessThanOrEqual(rumble.map { abs($0) }.max() ?? 0, VoiceIntroAudioNormalizer.peakCeiling + 0.002)
+        XCTAssertLessThanOrEqual(speech.map { abs($0) }.max() ?? 0, VoiceIntroAudioNormalizer.peakCeiling + 0.002)
+    }
+
+    // MARK: - Lidarr Output-Based Album & Track Search Ranking Tests
+
+    func testLidarrAlbumAndTrackOutputSearchRanking() {
+        let artists = [
+            LidarrArtistSearchResult(lidarrID: 10, foreignArtistId: "mb-mj", artistName: "Michael Jackson"),
+            LidarrArtistSearchResult(lidarrID: nil, foreignArtistId: "mb-other", artistName: "Jackson 5 Tribute")
+        ]
+        let matched = LidarrClient.selectMatchingArtists(from: artists, query: "Michael Jackson")
+        XCTAssertEqual(matched.map(\.artistName), ["Michael Jackson"])
+
+        // Searching "Michael Jackson" in Albums mode should rank MJ's studio albums above singles and deduplicate
+        let direct = [
+            LidarrAlbumSearchResult(foreignAlbumId: "a-single", title: "Michael Jackson Megamix", artistName: "Various Artists", releaseYear: 2010, albumType: "Single"),
+            LidarrAlbumSearchResult(lidarrID: 5, foreignAlbumId: "a-bad", title: "Bad", artistName: "Michael Jackson", releaseYear: 1987, albumType: "Album", rawJSONData: Data("{}".utf8))
+        ]
+        let discography = [
+            LidarrAlbumSearchResult(foreignAlbumId: "deezer-bad", title: "Bad", artistName: "Michael Jackson", releaseYear: 1987, albumType: "Album", coverURL: "https://example.com/bad.jpg"),
+            LidarrAlbumSearchResult(foreignAlbumId: "a-thriller", title: "Thriller", artistName: "Michael Jackson", releaseYear: 1982, albumType: "Album", coverURL: "https://example.com/thriller.jpg"),
+            LidarrAlbumSearchResult(foreignAlbumId: "a-single-mj", title: "Smooth Criminal", artistName: "Michael Jackson", releaseYear: 1988, albumType: "Single")
+        ]
+        let mergedAlbums = LidarrClient.mergeAndRankAlbumResults(
+            query: "Michael Jackson",
+            directAlbums: direct,
+            artistAlbums: discography,
+            matchedArtistNames: ["Michael Jackson"]
+        )
+        // Bad should be deduplicated, keeping lidarrID=5 AND inheriting coverURL from discography
+        let badMatches = mergedAlbums.filter { $0.title == "Bad" }
+        XCTAssertEqual(badMatches.count, 1)
+        XCTAssertEqual(badMatches.first?.lidarrID, 5)
+        XCTAssertEqual(badMatches.first?.coverURL, "https://example.com/bad.jpg")
+        // Studio albums by Michael Jackson must rank before singles and unrelated artists
+        XCTAssertEqual(Set(mergedAlbums.prefix(2).map(\.title)), Set(["Bad", "Thriller"]))
+
+        // Searching "Michael Jackson" in Tracks mode should surface official artist top tracks cleanly
+        let artistTracks = [
+            LidarrTrackMatch(id: "1", title: "Billie Jean", artistName: "Michael Jackson", albumTitle: "Thriller", duration: 294, popularity: 95),
+            LidarrTrackMatch(id: "2", title: "Beat It", artistName: "Michael Jackson", albumTitle: "Thriller", duration: 258, popularity: 90)
+        ]
+        let directTracks = [
+            LidarrTrackMatch(id: "99", title: "Michael Jackson Tribute", artistName: "Karaoke Stars", albumTitle: "Hits", duration: 200, popularity: 30),
+            LidarrTrackMatch(id: "1", title: "Billie Jean", artistName: "Michael Jackson", albumTitle: "Thriller", duration: 294, popularity: 95)
+        ]
+        let mergedTracks = LidarrClient.mergeAndRankTrackResults(
+            query: "Michael Jackson",
+            directTracks: directTracks,
+            artistTopTracks: artistTracks,
+            albumTracks: [],
+            matchedArtistName: "Michael Jackson"
+        )
+        XCTAssertEqual(mergedTracks.count, 3)
+        XCTAssertEqual(mergedTracks[0].title, "Billie Jean")
+        XCTAssertEqual(mergedTracks[1].title, "Beat It")
+    }
+
+    func testSearchQueryParserMultiFieldOperatorsAndPrefixes() {
+        let src = UUID()
+        let tracks = [
+            Track(id: "t1", sourceID: src, filePath: "/m/1.flac", fileName: "1.flac", fileSize: 100, modifiedAt: Date(), format: .flac,
+                  title: "The River", artist: "Bruce Springsteen", albumArtist: "Bruce Springsteen", album: "The River", year: 1980, genre: "Rock"),
+            Track(id: "t2", sourceID: src, filePath: "/m/2.flac", fileName: "2.flac", fileSize: 100, modifiedAt: Date(), format: .flac,
+                  title: "The River (Live 1985)", artist: "Bruce Springsteen", albumArtist: "Bruce Springsteen", album: "Live 1975-85", year: 1986, genre: "Rock"),
+            Track(id: "t3", sourceID: src, filePath: "/m/3.flac", fileName: "3.flac", fileSize: 100, modifiedAt: Date(), format: .mp3,
+                  title: "Born to Run", artist: "Bruce Springsteen", albumArtist: "Bruce Springsteen", album: "Born to Run", year: 1975, genre: "Rock"),
+            Track(id: "t4", sourceID: src, filePath: "/m/4.flac", fileName: "4.flac", fileSize: 100, modifiedAt: Date(), format: .flac,
+                  title: "River", artist: "Joni Mitchell", albumArtist: "Joni Mitchell", album: "Blue", year: 1971, genre: "Folk"),
+            Track(id: "t5", sourceID: src, filePath: "/m/5.flac", fileName: "5.flac", fileSize: 100, modifiedAt: Date(), format: .flac,
+                  title: "Bruce Wayne", artist: "Hans Zimmer", albumArtist: "Hans Zimmer", album: "The Dark Knight", year: 2008, genre: "Score")
+        ]
+        let catalog = PartyTrackCatalog(tracks: tracks)
+
+        // Multi-field search: "Bruce Springsteen The River"
+        let r1 = catalog.search(query: "Bruce Springsteen The River")
+        XCTAssertEqual(Set(r1.tracks.map(\.id)), Set(["t1", "t2"]))
+        XCTAssertEqual(r1.tracks.first?.id, "t1")
+
+        // Exclusion with "-": "Bruce Springsteen The River -live"
+        let r2 = catalog.search(query: "Bruce Springsteen The River -live")
+        XCTAssertEqual(r2.tracks.map(\.id), ["t1"])
+
+        // Require with "+" and exclude with "-": "+river +bruce -live"
+        let r3 = catalog.search(query: "+river +bruce -live")
+        XCTAssertEqual(r3.tracks.map(\.id), ["t1"])
+
+        // Field prefixes with spaces after colon: "Artist: Bruce Track: river"
+        let r4 = catalog.search(query: "Artist: Bruce Track: river")
+        XCTAssertEqual(Set(r4.tracks.map(\.id)), Set(["t1", "t2"]))
+
+        // Field prefixes ensure "Bruce" in title (Hans Zimmer - Bruce Wayne) does NOT match Artist: Bruce
+        let r5 = catalog.search(query: "Artist: Bruce")
+        XCTAssertFalse(r5.tracks.map(\.id).contains("t5"))
+        XCTAssertEqual(Set(r5.tracks.map(\.id)), Set(["t1", "t2", "t3"]))
+
+        // Multi-word sticky field prefixes + album exclusion: "Artist: Bruce Springsteen Track: The River -album:live"
+        let r6 = catalog.search(query: "Artist: Bruce Springsteen Track: The River -album:live")
+        XCTAssertEqual(r6.tracks.map(\.id), ["t1"])
+
+        // Attached prefixes & format/year: "artist:joni album:blue year:1971"
+        let r7 = catalog.search(query: "artist:joni album:blue year:1971")
+        XCTAssertEqual(r7.tracks.map(\.id), ["t4"])
+
+        // Pure exclusion query: "-live -folk"
+        let r8 = catalog.search(query: "-live -folk")
+        XCTAssertEqual(Set(r8.tracks.map(\.id)), Set(["t1", "t3", "t5"]))
+
+        // Standalone "-" or "+" mid-typing doesn't break results
+        let r9 = catalog.search(query: "joni -")
+        XCTAssertEqual(r9.tracks.map(\.id), ["t4"])
+    }
+
+    func testTrackAndAlbumStarRatingsPersistenceAndSearchFilter() throws {
+        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("echo-ratings-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let db = try EchoDatabase(dbURL: tmpDir.appendingPathComponent("test.sqlite"))
+        let src = UUID()
+        let t1 = Track(id: "r1", sourceID: src, filePath: "/m/1.flac", fileName: "1.flac", fileSize: 100, modifiedAt: Date(), format: .flac,
+                       title: "The River", artist: "Bruce Springsteen", albumArtist: "Bruce Springsteen", album: "The River")
+        let t2 = Track(id: "r2", sourceID: src, filePath: "/m/2.flac", fileName: "2.flac", fileSize: 100, modifiedAt: Date(), format: .flac,
+                       title: "Point Blank", artist: "Bruce Springsteen", albumArtist: "Bruce Springsteen", album: "The River")
+
+        // Save track rating & album rating (with clamping to 1...5)
+        db.saveTrackStats(TrackStats(trackID: t1.id, userPlayCount: 3, userRating: 5))
+        db.saveTrackStats(TrackStats(trackID: t2.id, userPlayCount: 1, userRating: 2))
+        db.saveAlbumRating(AlbumUserRating(albumKey: t1.albumKey, rating: 4))
+
+        let loadedTrackStats = db.loadAllTrackStats()
+        XCTAssertEqual(loadedTrackStats[t1.id]?.userRating, 5)
+        XCTAssertEqual(loadedTrackStats[t2.id]?.userRating, 2)
+
+        let loadedAlbumRatings = db.loadAllAlbumRatings()
+        XCTAssertEqual(loadedAlbumRatings[t1.albumKey]?.rating, 4)
+
+        // Delete album rating clears cleanly
+        db.deleteAlbumRating(albumKey: t1.albumKey)
+        XCTAssertNil(db.loadAllAlbumRatings()[t1.albumKey])
+
+        // SearchQueryTerms supports rating:4+ / rating:5 / -rating:2
+        let atLeast4 = SearchQueryTerms.parse("bruce rating:4+")
+        XCTAssertTrue(atLeast4.matches(track: t1, rating: 5))
+        XCTAssertFalse(atLeast4.matches(track: t2, rating: 2))
+        XCTAssertFalse(atLeast4.matches(track: t1, rating: nil))
+
+        let excludeLow = SearchQueryTerms.parse("bruce -rating:2")
+        XCTAssertTrue(excludeLow.matches(track: t1, rating: 5))
+        XCTAssertFalse(excludeLow.matches(track: t2, rating: 2))
+    }
+
     private func appendSynchsafe(_ d: inout Data, _ v: Int) {
         d.append(contentsOf: [
             UInt8((v >> 21) & 0x7F),
@@ -1208,5 +1792,15 @@ final class EchoCoreTests: XCTestCase {
             UInt8((v >> 7) & 0x7F),
             UInt8(v & 0x7F)
         ])
+    }
+}
+
+private final class LockedBox<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: T
+    init(_ value: T) { self.storage = value }
+    var value: T {
+        get { lock.lock(); defer { lock.unlock() }; return storage }
+        set { lock.lock(); defer { lock.unlock() }; storage = newValue }
     }
 }
