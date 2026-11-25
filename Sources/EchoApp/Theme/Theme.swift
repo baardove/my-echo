@@ -213,7 +213,7 @@ enum EchoTheme {
         case .gold: return hiResGold
         case .violet: return neoViolet
         case .coral: return Color(red: 1.000, green: 0.180, blue: 0.592)
-        case .blue: return Color(red: 0.25, green: 0.58, blue: 1.0)
+        case .blue: return Color(red: 0.45, green: 0.80, blue: 1.00)
         }
     }
 }
@@ -591,6 +591,36 @@ enum Formatters {
     static func bytes(_ count: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: max(0, count), countStyle: .file)
     }
+
+    static func compactCount(_ count: Int) -> String {
+        let absVal = abs(count)
+        if absVal >= 1_000_000 {
+            let val = Double(count) / 1_000_000.0
+            return val >= 10 ? String(format: "%.0fM", val) : String(format: "%.1fM", val)
+        }
+        if absVal >= 1_000 {
+            let val = Double(count) / 1_000.0
+            return val >= 100 ? String(format: "%.0fK", val) : String(format: "%.1fK", val)
+        }
+        return "\(count)"
+    }
+
+    static func relativeArrival(_ date: Date) -> String {
+        guard date > .distantPast else { return "" }
+        let cal = Calendar.current
+        if cal.isDateInToday(date) { return "Today" }
+        if cal.isDateInYesterday(date) { return "Yesterday" }
+        let days = cal.dateComponents([.day], from: date, to: Date()).day ?? 0
+        if days > 0 && days < 14 {
+            return "\(days)d ago"
+        }
+        if days >= 14 && days < 60 {
+            return "\(days / 7)w ago"
+        }
+        let formatter = DateFormatter()
+        formatter.dateFormat = cal.isDate(date, equalTo: Date(), toGranularity: .year) ? "MMM d" : "MMM yyyy"
+        return formatter.string(from: date)
+    }
 }
 
 @MainActor
@@ -600,8 +630,8 @@ final class ArtworkImageLoader {
     private let colorCache = NSCache<NSString, NSColor>()
 
     init() {
-        imageCache.countLimit = 400
-        colorCache.countLimit = 400
+        imageCache.countLimit = 1500
+        colorCache.countLimit = 1500
     }
 
     func image(forHash hash: String?, artworkCache: ArtworkCache) -> NSImage? {

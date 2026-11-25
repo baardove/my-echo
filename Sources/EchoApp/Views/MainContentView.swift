@@ -7,29 +7,45 @@ struct MainContentView: View {
     var body: some View {
         @Bindable var bindableStore = store
 
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                SidebarView()
+        ZStack {
+            VStack(spacing: 0) {
+                HStack(spacing: 0) {
+                    SidebarView()
 
-                VStack(spacing: 0) {
-                    topBar(searchBinding: $bindableStore.searchQuery)
+                    VStack(spacing: 0) {
+                        topBar(searchBinding: $bindableStore.searchQuery)
 
-                    ZStack(alignment: .bottom) {
-                        detailCanvas
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(EchoTheme.canvas)
+                        ZStack(alignment: .bottom) {
+                            detailCanvas
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .background(EchoTheme.canvas)
 
-                        if let toast = store.toastMessage {
-                            toastBanner(toast, isError: store.toastIsError)
-                                .padding(.bottom, 16)
-                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                            if let toast = store.toastMessage {
+                                toastBanner(toast, isError: store.toastIsError)
+                                    .padding(.bottom, 16)
+                                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                            }
                         }
+                        .animation(.easeOut(duration: 0.2), value: store.toastMessage)
                     }
-                    .animation(.easeOut(duration: 0.2), value: store.toastMessage)
                 }
+
+                PlayerBarView()
             }
 
-            PlayerBarView()
+            if let album = store.lightboxAlbum {
+                AlbumLightboxView(album: album)
+                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                    .zIndex(100)
+            }
+        }
+        .animation(.easeOut(duration: 0.18), value: store.lightboxAlbum?.id)
+        .onKeyPress(.escape) {
+            if store.lightboxAlbum != nil {
+                store.closeAlbumLightbox()
+                return .handled
+            }
+            return .ignored
         }
         .background {
             ZStack {
@@ -49,10 +65,18 @@ struct MainContentView: View {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 12, weight: .bold))
                         .frame(width: 28, height: 28)
-                        .background(EchoTheme.surface)
-                        .foregroundStyle(store.canGoBack ? EchoTheme.textPrimary : EchoTheme.textMuted)
-                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
-                        .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.border, lineWidth: 1))
+                        .background(
+                            ZStack {
+                                EchoTheme.surfaceElevated
+                                if store.canGoBack { EchoTheme.neoMint.opacity(0.06) }
+                            }
+                        )
+                        .foregroundStyle(store.canGoBack ? EchoTheme.textPrimary : EchoTheme.textMuted.opacity(0.45))
+                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                                .strokeBorder(store.canGoBack ? EchoTheme.neoMint.opacity(0.50) : EchoTheme.border.opacity(0.6), lineWidth: 1)
+                        )
                 }
                 .buttonStyle(.plain)
                 .disabled(!store.canGoBack)
@@ -62,10 +86,18 @@ struct MainContentView: View {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 12, weight: .bold))
                         .frame(width: 28, height: 28)
-                        .background(EchoTheme.surface)
-                        .foregroundStyle(store.canGoForward ? EchoTheme.textPrimary : EchoTheme.textMuted)
-                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
-                        .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.border, lineWidth: 1))
+                        .background(
+                            ZStack {
+                                EchoTheme.surfaceElevated
+                                if store.canGoForward { EchoTheme.neoMint.opacity(0.06) }
+                            }
+                        )
+                        .foregroundStyle(store.canGoForward ? EchoTheme.textPrimary : EchoTheme.textMuted.opacity(0.45))
+                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                                .strokeBorder(store.canGoForward ? EchoTheme.neoMint.opacity(0.50) : EchoTheme.border.opacity(0.6), lineWidth: 1)
+                        )
                 }
                 .buttonStyle(.plain)
                 .disabled(!store.canGoForward)
@@ -73,65 +105,104 @@ struct MainContentView: View {
             }
 
             // Active Library Scope Picker + Crisp Retro Global Search Input
-            HStack(spacing: 6) {
-                if !store.sources.isEmpty && !store.isViewingPodcasts {
-                    Menu {
-                        Button {
-                            store.selectLibrarySource(nil)
-                        } label: {
-                            HStack {
-                                Text("All Libraries (\(store.tracks.count))")
-                                if store.selectedSourceID == nil { Image(systemName: "checkmark") }
+            HStack(spacing: 8) {
+                if (!store.sources.isEmpty || store.lidarrConfig.isEnabled) && !store.isViewingPodcasts {
+                    NeoMenuButton {
+                        var items: [NeoMenuItem] = [
+                            .action(
+                                title: "All Libraries (\(store.tracks.count))",
+                                icon: "books.vertical.fill",
+                                isSelected: !store.isLidarrLibraryScope && store.selectedSourceID == nil
+                            ) {
+                                store.selectLibrarySource(nil)
+                            }
+                        ]
+                        if !store.sources.isEmpty {
+                            items.append(.divider)
+                            for src in store.sources {
+                                items.append(.action(
+                                    title: "\(src.name) (\(src.trackCount))",
+                                    icon: src.isNetworkVolume ? "externaldrive.connected.to.line.below" : "folder.fill",
+                                    isSelected: !store.isLidarrLibraryScope && store.selectedSourceID == src.id
+                                ) {
+                                    store.selectLibrarySource(src.id)
+                                })
                             }
                         }
-                        Divider()
-                        ForEach(store.sources) { src in
-                            Button {
-                                store.selectLibrarySource(src.id)
-                            } label: {
-                                HStack {
-                                    Text("\(src.name) (\(src.trackCount))")
-                                    if store.selectedSourceID == src.id { Image(systemName: "checkmark") }
-                                }
-                            }
+                        if store.lidarrConfig.isEnabled {
+                            items.append(.divider)
+                            items.append(.action(
+                                title: "Lidarr (Search & Mark for Download)",
+                                icon: "arrow.down.to.line.compact",
+                                isSelected: store.isLidarrLibraryScope
+                            ) {
+                                store.selectLidarrLibraryScope()
+                            })
                         }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: store.selectedSource == nil ? "books.vertical.fill" : (store.selectedSource?.isNetworkVolume == true ? "externaldrive.connected.to.line.below" : "folder.fill"))
-                                .font(.system(size: 10.5))
-                                .foregroundStyle(EchoTheme.neoCyan)
+                        return items
+                    } label: { isHovered in
+                        let scopeAccent = EchoTheme.neoMint
+                        let isScoped = store.selectedSourceID != nil || store.isLidarrLibraryScope
+                        HStack(spacing: 5.5) {
+                            Image(systemName: store.isLidarrLibraryScope
+                                  ? "arrow.down.to.line.compact"
+                                  : (store.selectedSource == nil
+                                     ? "books.vertical.fill"
+                                     : (store.selectedSource?.isNetworkVolume == true ? "externaldrive.connected.to.line.below" : "folder.fill")))
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(scopeAccent)
                             Text(store.selectedLibraryDisplayName)
-                                .font(.system(size: 11, weight: .bold))
+                                .font(.system(size: 11.5, weight: .bold))
                                 .foregroundStyle(EchoTheme.textPrimary)
                                 .lineLimit(1)
                             Image(systemName: "chevron.down")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundStyle(EchoTheme.textMuted)
+                                .font(.system(size: 8.5, weight: .bold))
+                                .foregroundStyle(scopeAccent.opacity(isHovered ? 0.95 : 0.72))
                         }
-                        .padding(.horizontal, 8)
+                        .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(EchoTheme.surfaceElevated)
-                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
-                        .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(store.selectedSourceID != nil ? EchoTheme.neoCyan.opacity(0.45) : EchoTheme.border, lineWidth: 1))
+                        .background(
+                            ZStack {
+                                EchoTheme.surfaceElevated
+                                scopeAccent.opacity(isHovered ? 0.14 : (isScoped ? 0.10 : 0.05))
+                            }
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                                .strokeBorder(scopeAccent.opacity(isHovered ? 0.90 : (isScoped ? 0.72 : 0.52)), lineWidth: 1)
+                        )
+                        .shadow(color: scopeAccent.opacity(isHovered ? 0.20 : 0.08), radius: 4, y: 1)
                     }
-                    .menuStyle(.borderlessButton)
                     .fixedSize()
                     .help("Active library scope: browsing and Global Search stay inside '\(store.selectedLibraryDisplayName)' until you switch libraries.")
                 }
 
                 HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
+                    Image(systemName: store.isLidarrLibraryScope ? "arrow.down.to.line.compact" : "magnifyingglass")
                         .font(.system(size: 12))
-                        .foregroundStyle(EchoTheme.neoCyan)
+                        .foregroundStyle(EchoTheme.neoMint)
                     TextField(
                         store.isViewingPodcasts
                             ? "Search subscribed podcasts & episodes..."
-                            : "Search \(store.selectedLibraryDisplayName) (artists, albums, tracks)...",
+                            : (store.isLidarrLibraryScope
+                               ? "Search Lidarr (albums, tracks, artists to download)..."
+                               : "Search \(store.selectedLibraryDisplayName) (artists, albums, tracks)..."),
                         text: searchBinding
                     )
                     .textFieldStyle(.plain)
                     .font(.system(size: 12.5))
                     .foregroundStyle(EchoTheme.textPrimary)
+                    .onSubmit {
+                        if store.isLidarrLibraryScope {
+                            store.searchLidarrUnified(query: store.searchQuery, immediate: true)
+                        }
+                    }
+                    .onChange(of: store.searchQuery) { _, newValue in
+                        if store.isLidarrLibraryScope {
+                            store.searchLidarrUnified(query: newValue, immediate: false)
+                        }
+                    }
                     if !store.searchQuery.isEmpty {
                         Button {
                             store.searchQuery = ""
@@ -145,117 +216,127 @@ struct MainContentView: View {
                     }
                 }
                 .padding(.horizontal, 10)
-                .padding(.vertical, 6.5)
-                .frame(maxWidth: 320)
-                .background(EchoTheme.surface)
-                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
-                .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(store.isGlobalSearchActive ? EchoTheme.neoCyan.opacity(0.6) : EchoTheme.border, lineWidth: 1))
+                .padding(.vertical, 6)
+                .frame(maxWidth: 340)
+                .background(EchoTheme.surfaceElevated.opacity(0.88))
+                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                        .strokeBorder(EchoTheme.neoMint.opacity(store.isGlobalSearchActive ? 0.85 : 0.42), lineWidth: 1)
+                )
             }
 
             Spacer()
 
             // Focused Playlist Quick-Target Picker
-            Menu {
+            NeoMenuButton {
                 if store.playlists.isEmpty {
-                    Button("Create First Playlist") {
-                        let pl = store.createPlaylist(name: "My Playlist")
-                        store.navigate(to: .playlist(pl.id))
-                    }
-                } else {
-                    ForEach(store.playlists) { pl in
-                        Button {
-                            store.setFocusedPlaylist(pl.id)
-                            store.showToast("Quick-add (+) target: '\(pl.name)'")
-                        } label: {
-                            HStack {
-                                Text(pl.name)
-                                if store.focusedPlaylist?.id == pl.id {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
+                    return [
+                        .action(title: "Create First Playlist", icon: "plus") {
+                            let pl = store.createPlaylist(name: "My Playlist")
+                            store.navigate(to: .playlist(pl.id))
                         }
-                    }
-                    Divider()
-                    Button("+ New Playlist") {
-                        let pl = store.createPlaylist(name: "Playlist \(store.playlists.count + 1)")
-                        store.navigate(to: .playlist(pl.id))
+                    ]
+                }
+                var items: [NeoMenuItem] = store.playlists.map { pl in
+                    .action(
+                        title: pl.name,
+                        icon: "music.note.list",
+                        isSelected: store.focusedPlaylist?.id == pl.id
+                    ) {
+                        store.setFocusedPlaylist(pl.id)
+                        store.showToast("Quick-add (P) target: '\(pl.name)'")
                     }
                 }
-            } label: {
+                items.append(.divider)
+                items.append(.action(title: "New Playlist", icon: "plus") {
+                    let pl = store.createPlaylist(name: "Playlist \(store.playlists.count + 1)")
+                    store.navigate(to: .playlist(pl.id))
+                })
+                return items
+            } label: { isHovered in
                 HStack(spacing: 6) {
                     Image(systemName: "plus.square.fill")
-                        .font(.system(size: 11))
-                        .foregroundStyle(EchoTheme.neoCyan)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(EchoTheme.neoMint)
                     Text(store.focusedPlaylist?.name ?? "No Playlist")
-                        .font(.system(size: 11.5, weight: .semibold))
+                        .font(.system(size: 11.5, weight: .bold))
                         .foregroundStyle(EchoTheme.textPrimary)
                         .lineLimit(1)
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(EchoTheme.textMuted)
+                        .font(.system(size: 8.5, weight: .bold))
+                        .foregroundStyle(EchoTheme.neoMint.opacity(isHovered ? 0.95 : 0.72))
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(EchoTheme.neoCyan.opacity(0.10))
-                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
-                .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.neoCyan.opacity(0.35), lineWidth: 1))
+                .background(
+                    ZStack {
+                        EchoTheme.surfaceElevated
+                        EchoTheme.neoMint.opacity(isHovered ? 0.14 : 0.05)
+                    }
+                )
+                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                        .strokeBorder(EchoTheme.neoMint.opacity(isHovered ? 0.90 : 0.55), lineWidth: 1)
+                )
+                .shadow(color: EchoTheme.neoMint.opacity(isHovered ? 0.20 : 0.08), radius: 4, y: 1)
             }
-            .menuStyle(.borderlessButton)
             .fixedSize()
-            .help("Focused playlist: clicking the + button on any song adds it directly to this playlist. Click to switch target playlist.")
+            .help("Focused playlist: clicking P on any song, album, or artist adds it directly to this playlist. Click to switch target playlist.")
 
             // Selected Sync Destination Picker (Supports Single & Multi-Destination switching!)
             if !store.devices.isEmpty {
                 let device = store.activeDevice
                 let plan = store.activeSyncPlan
 
-                Menu {
-                    ForEach(store.devices) { dev in
-                        Button {
+                NeoMenuButton {
+                    var items: [NeoMenuItem] = store.devices.map { dev in
+                        .action(
+                            title: "\(dev.isConnected ? "●" : "○") \(dev.name) — \(dev.preset.displayName)",
+                            icon: dev.isVirtualWireless ? "iphone" : "sdcard.fill",
+                            isSelected: device?.id == dev.id
+                        ) {
                             store.selectActiveDevice(dev.id)
-                        } label: {
-                            HStack {
-                                Text("\(dev.isConnected ? "●" : "○") \(dev.name) — \(dev.preset.displayName)")
-                                if device?.id == dev.id {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
                         }
                     }
                     if store.destinationMode == .multi && device != nil {
-                        Divider()
-                        Button("Clear Selected Destination") {
+                        items.append(.divider)
+                        items.append(.action(title: "Clear Selected Destination") {
                             store.selectActiveDevice(nil)
-                        }
+                        })
                     }
-                    Divider()
+                    items.append(.divider)
                     if let device {
-                        Button("Open \(device.name) Sync Settings...") {
+                        items.append(.action(title: "Open \(device.name) Sync Settings...", icon: "slider.horizontal.3") {
                             store.navigate(to: .deviceSync(device.id))
-                        }
+                        })
                     }
-                    Button("Switch Single / Multi-Destination Mode...") {
+                    items.append(.action(title: "Switch Single / Multi-Destination Mode...", icon: "gearshape") {
                         store.navigate(to: .settings)
-                    }
-                } label: {
-                    HStack(spacing: 7) {
+                    })
+                    return items
+                } label: { isHovered in
+                    let borderAccent: Color = device == nil ? EchoTheme.warningAmber : EchoTheme.neoMint
+                    HStack(spacing: 6.5) {
                         if let device {
-                            let accent = EchoTheme.color(for: device.accentColor)
+                            let dotColor = EchoTheme.color(for: device.accentColor)
                             RoundedRectangle(cornerRadius: 2)
-                                .fill(device.isConnected ? accent : EchoTheme.dangerCoral)
+                                .fill(device.isConnected ? dotColor : EchoTheme.dangerCoral)
                                 .frame(width: 7, height: 7)
                             Text(device.name)
-                                .font(.system(size: 12, weight: .bold))
+                                .font(.system(size: 11.5, weight: .bold))
                                 .foregroundStyle(EchoTheme.textPrimary)
+                                .lineLimit(1)
                             if let plan {
                                 if let cap = plan.maxTrackLimit {
                                     Text("\(plan.projectedTotalTracks)/\(cap)")
-                                        .font(.system(size: 10.5, design: .monospaced))
-                                        .foregroundStyle(plan.exceedsTrackLimit ? EchoTheme.dangerCoral : EchoTheme.neoCyan)
+                                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                                        .foregroundStyle(plan.exceedsTrackLimit ? EchoTheme.dangerCoral : EchoTheme.neoMint.opacity(0.9))
                                 } else {
-                                    Text("\(plan.projectedTotalTracks) items")
-                                        .font(.system(size: 10.5, design: .monospaced))
-                                        .foregroundStyle(EchoTheme.neoCyan)
+                                    Text("\(plan.projectedTotalTracks)")
+                                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                                        .foregroundStyle(EchoTheme.neoMint.opacity(0.9))
                                 }
                             }
                         } else {
@@ -263,23 +344,28 @@ struct MainContentView: View {
                                 .font(.system(size: 11))
                                 .foregroundStyle(EchoTheme.warningAmber)
                             Text("Select Destination")
-                                .font(.system(size: 12, weight: .bold))
+                                .font(.system(size: 11.5, weight: .bold))
                                 .foregroundStyle(EchoTheme.warningAmber)
                         }
                         Image(systemName: "chevron.down")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(EchoTheme.textMuted)
+                            .font(.system(size: 8.5, weight: .bold))
+                            .foregroundStyle(borderAccent.opacity(isHovered ? 0.95 : 0.72))
                     }
-                    .padding(.horizontal, 11)
+                    .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(device == nil ? EchoTheme.warningAmber.opacity(0.14) : EchoTheme.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: EchoTheme.radiusControl)
-                            .strokeBorder(device == nil ? EchoTheme.warningAmber.opacity(0.6) : EchoTheme.borderStrong, lineWidth: 1)
+                    .background(
+                        ZStack {
+                            EchoTheme.surfaceElevated
+                            borderAccent.opacity(isHovered ? 0.14 : (device == nil ? 0.12 : 0.05))
+                        }
                     )
+                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                            .strokeBorder(borderAccent.opacity(isHovered ? 0.90 : 0.55), lineWidth: 1)
+                    )
+                    .shadow(color: borderAccent.opacity(isHovered ? 0.20 : 0.08), radius: 4, y: 1)
                 }
-                .menuStyle(.borderlessButton)
                 .fixedSize()
                 .help(device == nil
                       ? "Multi-Destination mode is active: click to choose which player or SD card to target for syncing."
@@ -296,6 +382,7 @@ struct MainContentView: View {
                     .padding(.vertical, 6.5)
                     .background(EchoTheme.neoMint.opacity(0.15))
                     .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                    .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.neoMint.opacity(0.55), lineWidth: 1))
                     .help("Sync in progress: \(prog.phase) — \(prog.currentItem)")
                 } else if let device, device.isConnected {
                     let pending = (plan?.totalPendingCopies ?? 0) + (plan?.totalPendingRemovals ?? 0)
@@ -309,29 +396,14 @@ struct MainContentView: View {
                 } else {
                     let connectedDevices = store.devices.filter(\.isConnected)
                     if !connectedDevices.isEmpty {
-                        Menu {
-                            ForEach(connectedDevices) { dev in
-                                Button("Sync to \(dev.name)") {
+                        NeoPrimaryMenuButton(title: "Sync to", icon: "arrow.triangle.2.circlepath") {
+                            connectedDevices.map { dev in
+                                .action(title: "Sync to \(dev.name)", icon: dev.isVirtualWireless ? "iphone" : "sdcard.fill") {
                                     store.selectActiveDevice(dev.id)
                                     store.startSync(for: dev)
                                 }
                             }
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "arrow.triangle.2.circlepath")
-                                    .font(.system(size: 11.5, weight: .bold))
-                                Text("Sync to")
-                                    .font(.system(size: 12, weight: .black))
-                                Image(systemName: "chevron.down")
-                                    .font(.system(size: 8.5, weight: .black))
-                            }
-                            .padding(.horizontal, 13)
-                            .padding(.vertical, 7.5)
-                            .background(EchoTheme.accentGradient)
-                            .foregroundStyle(.black)
-                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
                         }
-                        .menuStyle(.borderlessButton)
                         .fixedSize()
                         .help("Choose a connected destination to select and sync immediately.")
                     } else {
@@ -344,22 +416,9 @@ struct MainContentView: View {
                     }
                 }
             } else {
-                Button {
+                NeoSecondaryButton(title: "Connect Player", icon: "sdcard") {
                     store.addCustomDeviceFolderViaPanel()
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "sdcard")
-                        Text("Connect Player")
-                            .font(.system(size: 12, weight: .bold))
-                    }
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 6.5)
-                    .background(EchoTheme.surfaceElevated)
-                    .foregroundStyle(EchoTheme.neoMint)
-                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
-                    .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.borderStrong, lineWidth: 1))
                 }
-                .buttonStyle(.plain)
                 .help("Pair a FiiO player, MicroSD card, or local target folder to enable syncing.")
             }
         }
@@ -395,6 +454,8 @@ struct MainContentView: View {
                 PodcastDetailView(showID: id)
             case .playlist(let id):
                 PlaylistDetailView(playlistID: id)
+            case .lidarr:
+                LidarrView()
             case .sources:
                 SourcesView()
             case .deviceSync(let id):
@@ -457,6 +518,35 @@ struct GlobalSearchResultsView: View {
                             store.searchPodcasts()
                         }
                         .help("Run '\(query)' against Apple Podcasts & gPodder Open Directories to discover new shows.")
+                    } else if !store.isLidarrLibraryScope && store.lidarrConfig.isEnabled {
+                        Button {
+                            store.isLidarrLibraryScope = true
+                            store.selectedSourceID = nil
+                            store.searchLidarrUnified(query: query, immediate: true)
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "arrow.down.to.line.compact")
+                                    .font(.system(size: 11, weight: .bold))
+                                Text("Search in Lidarr")
+                                    .font(.system(size: 11.5, weight: .bold))
+                            }
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 6.5)
+                            .background(EchoTheme.neoMint.opacity(0.16))
+                            .foregroundStyle(EchoTheme.neoMint)
+                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                            .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.neoMint.opacity(0.45), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Switch active library to Lidarr and search '\(query)' to mark albums/tracks for download.")
+                    } else if store.isLidarrLibraryScope {
+                        NeoPrimaryButton(
+                            title: store.isSearchingLidarr ? "Searching..." : "Search Lidarr",
+                            icon: "magnifyingglass",
+                            disabled: store.isSearchingLidarr
+                        ) {
+                            store.searchLidarrUnified(query: query, immediate: true)
+                        }
                     }
 
                     Button {
@@ -473,7 +563,56 @@ struct GlobalSearchResultsView: View {
                     .help("Close search results and return to the previous screen.")
                 }
 
-                if store.isViewingPodcasts {
+                if store.isLidarrLibraryScope {
+                    if store.lidarrMarkedCount > 0 {
+                        LidarrMarkedDownloadsBar()
+                    }
+
+                    if store.isSearchingLidarr {
+                        HStack(spacing: 10) {
+                            ProgressView().controlSize(.small)
+                            Text("Searching Lidarr albums, artists, and tracks for \"\(query)\"...")
+                                .font(.system(size: 13))
+                                .foregroundStyle(EchoTheme.textSecondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(36)
+                        .background(EchoTheme.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard))
+                    } else if let err = store.lidarrSearchError,
+                              store.lidarrAlbumResults.isEmpty && store.lidarrTrackResults.isEmpty && store.lidarrArtistResults.isEmpty {
+                        emptySearchCard(err)
+                    } else if store.lidarrAlbumResults.isEmpty && store.lidarrTrackResults.isEmpty && store.lidarrArtistResults.isEmpty {
+                        emptySearchCard("Type an artist, album, or track name and press Enter to search Lidarr and mark releases for download.")
+                    } else {
+                        if !store.lidarrAlbumResults.isEmpty {
+                            sectionTitle("LIDARR ALBUMS (\(store.lidarrAlbumResults.count)) · CHECK BOXES TO MARK FOR DOWNLOAD")
+                            LazyVStack(spacing: 8) {
+                                ForEach(store.lidarrAlbumResults.prefix(20)) { album in
+                                    LidarrAlbumResultRow(album: album)
+                                }
+                            }
+                        }
+
+                        if !store.lidarrTrackResults.isEmpty {
+                            sectionTitle("TRACKS · MARK PARENT ALBUM FOR DOWNLOAD (\(store.lidarrTrackResults.count))")
+                            LazyVStack(spacing: 8) {
+                                ForEach(store.lidarrTrackResults.prefix(12)) { track in
+                                    LidarrTrackResultRow(track: track)
+                                }
+                            }
+                        }
+
+                        if !store.lidarrArtistResults.isEmpty {
+                            sectionTitle("LIDARR ARTISTS (\(store.lidarrArtistResults.count))")
+                            LazyVStack(spacing: 8) {
+                                ForEach(store.lidarrArtistResults.prefix(8)) { artist in
+                                    LidarrArtistResultRow(artist: artist)
+                                }
+                            }
+                        }
+                    }
+                } else if store.isViewingPodcasts {
                     let matchingShows = store.filteredPodcastShows
                     let matchingEps = store.filteredPodcastEpisodes
 

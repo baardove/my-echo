@@ -43,10 +43,19 @@ struct SidebarView: View {
                         sidebarRow(icon: "square.stack.fill", title: "Albums", count: store.albums.count, destination: .albums, tip: "Browse albums in '\(store.selectedLibraryDisplayName)' with cover art and path previews.")
                         sidebarRow(icon: "music.note", title: "Tracks", count: store.scopedTracks.count, destination: .tracks, tip: "View every track inside '\(store.selectedLibraryDisplayName)'.")
                         sidebarRow(icon: "mic.fill", title: "Podcasts", count: store.podcasts.count, destination: .podcasts, tip: "Search podcast directories, subscribe via RSS, download episodes, and sync to single or multiple players.")
+                        if store.lidarrConfig.isEnabled {
+                            sidebarRow(
+                                icon: "arrow.down.to.line.compact",
+                                title: "Downloads (Lidarr)",
+                                count: store.lidarrQueue.isEmpty ? nil : store.lidarrQueue.count,
+                                destination: .lidarr,
+                                tip: "Search albums, tracks, or artists and order lossless downloads through your Lidarr instance."
+                            )
+                        }
                         sidebarRow(icon: "externaldrive.connected.to.line.below.fill", title: "Sources & NAS", count: store.sources.count, destination: .sources, tip: "Manage local music folders and mounted SMB/NFS NAS shares.")
 
                         // Library Scope Selector (stay inside selected library until another library is selected)
-                        if !store.sources.isEmpty {
+                        if !store.sources.isEmpty || store.lidarrConfig.isEnabled {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("ACTIVE LIBRARY SCOPE")
                                     .font(.system(size: 8.5, weight: .bold, design: .monospaced))
@@ -58,10 +67,10 @@ struct SidebarView: View {
 
                                 libraryScopeRow(
                                     title: "All Libraries",
-                                    count: store.tracks.count,
+                                    badgeText: "\(store.tracks.count)",
                                     icon: "books.vertical.fill",
                                     isOnline: true,
-                                    isSelected: store.selectedSourceID == nil,
+                                    isSelected: !store.isLidarrLibraryScope && store.selectedSourceID == nil,
                                     tip: "Show and search music across all configured local and NAS libraries."
                                 ) {
                                     store.selectLibrarySource(nil)
@@ -70,13 +79,40 @@ struct SidebarView: View {
                                 ForEach(store.sources) { src in
                                     libraryScopeRow(
                                         title: src.name,
-                                        count: src.trackCount,
+                                        badgeText: "\(src.trackCount)",
                                         icon: src.isNetworkVolume ? "externaldrive.connected.to.line.below" : "folder.fill",
                                         isOnline: src.isAvailable,
-                                        isSelected: store.selectedSourceID == src.id,
+                                        isSelected: !store.isLidarrLibraryScope && store.selectedSourceID == src.id,
                                         tip: "Stay inside library '\(src.name)' while exploring Artists, Albums, Tracks, and using Global Search until you select another library."
                                     ) {
                                         store.selectLibrarySource(src.id)
+                                    }
+                                }
+
+                                if store.lidarrConfig.isEnabled {
+                                    let lidarrBadge: String = {
+                                        if store.lidarrMarkedCount > 0 { return "\(store.lidarrMarkedCount) marked" }
+                                        if !store.lidarrQueue.isEmpty {
+                                            if let pct = store.lidarrAverageQueueProgress {
+                                                return "\(store.lidarrQueue.count) dl · \(Int((pct * 100).rounded()))%"
+                                            }
+                                            return "\(store.lidarrQueue.count) dl"
+                                        }
+                                        return store.lidarrStatus != nil ? "ONLINE" : "SETUP"
+                                    }()
+                                    let lidarrAccent = store.lidarrWarningCount > 0 ? EchoTheme.warningAmber : EchoTheme.neoMint
+                                    libraryScopeRow(
+                                        title: "Lidarr",
+                                        badgeText: lidarrBadge,
+                                        icon: "arrow.down.to.line.compact",
+                                        isOnline: store.lidarrStatus != nil || store.lidarrConfig.isConfigured,
+                                        isSelected: store.isLidarrLibraryScope,
+                                        accent: lidarrAccent,
+                                        tip: store.lidarrWarningCount > 0
+                                            ? "Lidarr has \(store.lidarrWarningCount) download warning(s) — click to inspect queue or search Lidarr."
+                                            : "Switch active library & top Global Search bar to Lidarr — search albums, tracks, or artists and mark items for download."
+                                    ) {
+                                        store.selectLidarrLibraryScope()
                                     }
                                 }
                             }
@@ -155,18 +191,18 @@ struct SidebarView: View {
                         HStack {
                             sidebarSectionTitle(store.destinationMode == .multi ? "DESTINATIONS (MULTI)" : "PLAYERS & SD CARDS")
                             Spacer()
-                            Button {
-                                store.addCustomDeviceFolderViaPanel()
-                            } label: {
-                                Image(systemName: "plus")
-                                    .font(.system(size: 11, weight: .bold))
-                                    .foregroundStyle(EchoTheme.textSecondary)
-                                    .frame(width: 22, height: 22)
-                                    .background(EchoTheme.surfaceElevated.opacity(0.7))
-                                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                            NeoIconMenuButton(icon: "plus", accent: EchoTheme.neoMint, size: 22, iconSize: 10.5) {
+                                [
+                                    .action(title: "Add Virtual iPhone (Wi-Fi Auto-Sync)", icon: "iphone.radiowaves.left.and.right") {
+                                        store.addVirtualIPhoneDestination()
+                                    },
+                                    .action(title: "Add Player / SD Card Folder...", icon: "sdcard.fill") {
+                                        store.addCustomDeviceFolderViaPanel()
+                                    }
+                                ]
                             }
-                            .buttonStyle(.plain)
-                            .help("Add a FiiO player, MicroSD card, or local target folder as a sync destination.")
+                            .fixedSize()
+                            .help("Add a virtual iPhone Wi-Fi Auto-Sync destination, FiiO player, MicroSD card, or target folder.")
                             .padding(.trailing, 12)
                         }
 
@@ -204,15 +240,27 @@ struct SidebarView: View {
                                         Image(systemName: "sdcard.fill")
                                             .font(.system(size: 12))
                                             .foregroundStyle(EchoTheme.neoCyan)
-                                        VStack(alignment: .leading, spacing: 1) {
-                                            Text(vol.name)
-                                                .font(.system(size: 11.5, weight: .semibold))
-                                                .foregroundStyle(EchoTheme.textPrimary)
-                                                .lineLimit(1)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            HStack(spacing: 5) {
+                                                Text(vol.name)
+                                                    .font(.system(size: 11.5, weight: .semibold))
+                                                    .foregroundStyle(EchoTheme.textPrimary)
+                                                    .lineLimit(1)
+                                                if vol.connectionKind != .unknown {
+                                                    Text(vol.connectionKind.shortBadge)
+                                                        .font(.system(size: 7.5, weight: .black, design: .monospaced))
+                                                        .padding(.horizontal, 4)
+                                                        .padding(.vertical, 1.5)
+                                                        .background((vol.connectionKind == .inPlayer ? EchoTheme.neoMint : EchoTheme.warningAmber).opacity(0.18))
+                                                        .foregroundStyle(vol.connectionKind == .inPlayer ? EchoTheme.neoMint : EchoTheme.warningAmber)
+                                                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                                                }
+                                            }
                                             Text("\(Formatters.bytes(vol.availableBytes)) free · \(vol.fileSystemType)")
                                                 .font(.system(size: 9.5))
                                                 .foregroundStyle(EchoTheme.textMuted)
                                         }
+                                        .help(vol.connectionSummary)
                                         Spacer()
                                         Button("Pair") {
                                             store.addDevice(from: vol, preset: .fiioEchoMini)
@@ -335,34 +383,43 @@ struct SidebarView: View {
         }
     }
 
-    private func libraryScopeRow(title: String, count: Int, icon: String, isOnline: Bool, isSelected: Bool, tip: String, action: @escaping () -> Void) -> some View {
+    private func libraryScopeRow(
+        title: String,
+        badgeText: String,
+        icon: String,
+        isOnline: Bool,
+        isSelected: Bool,
+        accent: Color = EchoTheme.neoCyan,
+        tip: String,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             HStack(spacing: 8) {
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(isSelected ? EchoTheme.neoCyan : (isOnline ? EchoTheme.textMuted.opacity(0.45) : EchoTheme.dangerCoral))
+                    .fill(isSelected ? accent : (isOnline ? EchoTheme.textMuted.opacity(0.45) : EchoTheme.dangerCoral))
                     .frame(width: 5, height: 14)
                 Image(systemName: icon)
                     .font(.system(size: 11))
-                    .foregroundStyle(isSelected ? EchoTheme.neoCyan : EchoTheme.textMuted)
+                    .foregroundStyle(isSelected ? accent : EchoTheme.textMuted)
                     .frame(width: 15)
                 Text(title)
                     .font(.system(size: 11.5, weight: isSelected ? .bold : .medium))
                     .foregroundStyle(isSelected ? EchoTheme.textPrimary : EchoTheme.textSecondary)
                     .lineLimit(1)
                 Spacer()
-                Text("\(count)")
-                    .font(.system(size: 9.5, design: .monospaced))
-                    .foregroundStyle(isSelected ? EchoTheme.neoCyan : EchoTheme.textMuted)
+                Text(badgeText)
+                    .font(.system(size: 9.5, weight: isSelected ? .bold : .regular, design: .monospaced))
+                    .foregroundStyle(isSelected ? accent : EchoTheme.textMuted)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .background(
                 RoundedRectangle(cornerRadius: EchoTheme.radiusSmall)
-                    .fill(isSelected ? EchoTheme.neoCyan.opacity(0.12) : Color.clear)
+                    .fill(isSelected ? accent.opacity(0.12) : Color.clear)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: EchoTheme.radiusSmall)
-                    .strokeBorder(isSelected ? EchoTheme.neoCyan.opacity(0.4) : Color.clear, lineWidth: 1)
+                    .strokeBorder(isSelected ? accent.opacity(0.4) : Color.clear, lineWidth: 1)
             )
             .padding(.horizontal, 8)
         }
@@ -374,6 +431,11 @@ struct SidebarView: View {
         let isActive = isDestinationHighlighted(destination)
         return Button {
             store.searchQuery = ""
+            if destination == .lidarr {
+                store.isLidarrLibraryScope = true
+            } else if destination == .home || destination == .artists || destination == .albums || destination == .tracks {
+                store.isLidarrLibraryScope = false
+            }
             store.navigate(to: destination)
         } label: {
             HStack(spacing: 10) {
@@ -555,10 +617,16 @@ private struct SidebarDeviceDropCard: View {
 
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 7) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(connected ? accent : EchoTheme.textMuted)
-                    .frame(width: 7, height: 7)
-                    .shadow(color: connected ? accent : .clear, radius: 4)
+                if device.isVirtualWireless {
+                    Image(systemName: "iphone")
+                        .font(.system(size: 10.5, weight: .bold))
+                        .foregroundStyle(store.isWirelessServerRunning ? accent : EchoTheme.warningAmber)
+                } else {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(connected ? accent : EchoTheme.textMuted)
+                        .frame(width: 7, height: 7)
+                        .shadow(color: connected ? accent : .clear, radius: 4)
+                }
 
                 Button {
                     store.navigate(to: .deviceSync(device.id))
@@ -617,10 +685,28 @@ private struct SidebarDeviceDropCard: View {
                 store.navigate(to: .deviceSync(device.id))
             } label: {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(device.preset.displayName)
-                        .font(.system(size: 10))
-                        .foregroundStyle(EchoTheme.textSecondary)
-                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        Text(device.preset.displayName)
+                            .font(.system(size: 10))
+                            .foregroundStyle(EchoTheme.textSecondary)
+                            .lineLimit(1)
+                        Spacer(minLength: 2)
+                        if !device.isVirtualWireless, let vol, vol.connectionKind != .unknown {
+                            let badgeColor: Color = vol.connectionKind == .inPlayer ? EchoTheme.neoMint : (vol.connectionKind.isCardReader ? EchoTheme.warningAmber : EchoTheme.neoCyan)
+                            HStack(spacing: 3) {
+                                Image(systemName: vol.connectionKind.iconName)
+                                    .font(.system(size: 7.5, weight: .bold))
+                                Text(vol.connectionKind.shortBadge)
+                                    .font(.system(size: 7.5, weight: .black, design: .monospaced))
+                            }
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(badgeColor.opacity(0.16))
+                            .foregroundStyle(badgeColor)
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                            .help(vol.connectionSummary)
+                        }
+                    }
 
                     if let vol, vol.totalBytes > 0 {
                         let ratio = min(1.0, max(0.0, Double(vol.usedBytes) / Double(vol.totalBytes)))

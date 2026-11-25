@@ -47,7 +47,7 @@ struct PodcastsView: View {
                                         .font(.system(size: 13.5, weight: .bold))
                                         .foregroundStyle(EchoTheme.textPrimary)
                                     TextField("https://feeds.example.com/podcast.xml", text: $directRSSURL)
-                                        .textFieldStyle(.roundedBorder)
+                                        .neoTextField()
                                         .frame(width: 320)
                                         .onSubmit { submitDirectRSS() }
                                     HStack {
@@ -77,18 +77,18 @@ struct PodcastsView: View {
 
                     // Live Multi-Directory Podcast Search Bar
                     HStack(spacing: 8) {
-                        Picker("", selection: $bindableStore.selectedPodcastDirectory) {
-                            ForEach(PodcastDirectory.allCases) { dir in
-                                Text(dir.displayName).tag(dir)
-                            }
-                        }
-                        .frame(width: 158)
+                        NeoPickerDropdown(
+                            icon: "globe",
+                            selection: $bindableStore.selectedPodcastDirectory,
+                            options: PodcastDirectory.allCases.map { ($0, $0.displayName) }
+                        )
+                        .fixedSize()
                         .help("Choose which podcast directory to search: All Directories (Apple + gPodder combined), Apple Podcasts, gPodder Open Directory, or Featured Picks.")
 
                         HStack(spacing: 8) {
                             Image(systemName: "magnifyingglass")
-                                .foregroundStyle(EchoTheme.neoCyan)
-                            TextField("Search podcasts across directories...", text: $bindableStore.podcastSearchQuery)
+                                .foregroundStyle(EchoTheme.neoMint)
+                            TextField("Search podcasts, hosts, or genres (e.g. True Crime, Tech, Sports)...", text: $bindableStore.podcastSearchQuery)
                                 .textFieldStyle(.plain)
                                 .font(.system(size: 13))
                                 .onSubmit { store.searchPodcasts() }
@@ -105,10 +105,10 @@ struct PodcastsView: View {
                             }
                         }
                         .padding(.horizontal, 12)
-                        .padding(.vertical, 8.5)
-                        .background(EchoTheme.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
-                        .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.borderStrong, lineWidth: 1))
+                        .padding(.vertical, 8)
+                        .background(EchoTheme.surfaceElevated.opacity(0.88))
+                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous).strokeBorder(EchoTheme.neoMint.opacity(0.45), lineWidth: 1))
 
                         Button {
                             store.searchPodcasts()
@@ -118,13 +118,23 @@ struct PodcastsView: View {
                                     ProgressView().controlSize(.small)
                                 } else {
                                     Image(systemName: "magnifyingglass")
-                                        .font(.system(size: 13, weight: .black))
+                                        .font(.system(size: 13, weight: .bold))
                                 }
                             }
                             .frame(width: 38, height: 34)
-                            .background(EchoTheme.accentGradient)
-                            .foregroundStyle(.black)
+                            .background(
+                                ZStack {
+                                    EchoTheme.surfaceElevated
+                                    EchoTheme.neoMint.opacity(0.10)
+                                }
+                            )
+                            .foregroundStyle(EchoTheme.neoMint)
                             .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: EchoTheme.radiusControl)
+                                    .strokeBorder(EchoTheme.neoMint.opacity(0.75), lineWidth: 1.1)
+                            )
+                            .shadow(color: EchoTheme.neoMint.opacity(0.18), radius: 5, y: 1)
                         }
                         .buttonStyle(.plain)
                         .disabled(store.isSearchingPodcasts || store.podcastSearchQuery.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -158,7 +168,9 @@ struct PodcastsView: View {
                     }
                 }
 
-                // Search / Directory Results Section
+                let hasSearchResults = !store.podcastSearchResults.isEmpty
+
+                // Search / Directory Results Section (Large Cover-Art Cards)
                 if store.isSearchingPodcasts {
                     HStack(spacing: 10) {
                         ProgressView().controlSize(.small)
@@ -174,8 +186,8 @@ struct PodcastsView: View {
                         .padding(12)
                         .background(EchoTheme.warningAmber.opacity(0.10))
                         .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
-                } else if !store.podcastSearchResults.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
+                } else if hasSearchResults {
+                    VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             Text("\(store.activePodcastCategory?.rawValue.uppercased() ?? "SEARCH RESULTS") (\(store.podcastSearchResults.count))")
                                 .font(.system(size: 10.5, weight: .bold, design: .monospaced))
@@ -193,94 +205,125 @@ struct PodcastsView: View {
                             .help("Hide directory results.")
                         }
 
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 270, maximum: 360), spacing: 12)], spacing: 12) {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 185, maximum: 220), spacing: 16)], spacing: 16) {
                             ForEach(store.podcastSearchResults) { result in
                                 let isSubscribed = store.podcasts.contains { $0.feedURL.caseInsensitiveCompare(result.feedURL) == .orderedSame }
-                                HStack(spacing: 12) {
-                                    AsyncImage(url: result.artworkURL.flatMap(URL.init(string:))) { phase in
-                                        switch phase {
-                                        case .success(let image):
-                                            image.resizable().aspectRatio(contentMode: .fill)
-                                        default:
-                                            ZStack {
-                                                EchoTheme.surfaceElevated
-                                                Image(systemName: "mic.fill").foregroundStyle(EchoTheme.neoCyan.opacity(0.6))
+                                VStack(alignment: .leading, spacing: 10) {
+                                    ZStack(alignment: .topTrailing) {
+                                        AsyncImage(url: result.artworkURL.flatMap(URL.init(string:))) { phase in
+                                            switch phase {
+                                            case .success(let image):
+                                                image.resizable().aspectRatio(contentMode: .fill)
+                                            default:
+                                                ZStack {
+                                                    EchoTheme.surfaceElevated
+                                                    Image(systemName: "mic.fill")
+                                                        .font(.system(size: 34))
+                                                        .foregroundStyle(EchoTheme.neoCyan.opacity(0.55))
+                                                }
                                             }
                                         }
+                                        .aspectRatio(1, contentMode: .fit)
+                                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                                        .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.border, lineWidth: 1))
+
+                                        Button {
+                                            store.subscribeToPodcast(feedURL: result.feedURL, fallbackArtworkURL: result.artworkURL)
+                                        } label: {
+                                            Image(systemName: isSubscribed ? "checkmark" : "plus")
+                                                .font(.system(size: 13, weight: .black))
+                                                .frame(width: 30, height: 30)
+                                                .background(isSubscribed ? EchoTheme.neoMint : EchoTheme.neoCyan)
+                                                .foregroundStyle(.black)
+                                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                                .shadow(color: .black.opacity(0.45), radius: 4, y: 2)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .padding(6)
+                                        .help(isSubscribed
+                                              ? "Already subscribed to '\(result.title)'. Click to open its episode list."
+                                              : "Subscribe to '\(result.title)' and fetch its RSS episodes for playback and syncing.")
                                     }
-                                    .frame(width: 54, height: 54)
-                                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
-                                    .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(EchoTheme.border, lineWidth: 1))
 
                                     VStack(alignment: .leading, spacing: 3) {
                                         Text(result.title)
-                                            .font(.system(size: 13, weight: .bold))
+                                            .font(.system(size: 13.5, weight: .bold))
                                             .foregroundStyle(EchoTheme.textPrimary)
-                                            .lineLimit(1)
+                                            .lineLimit(2)
                                         Text(result.author)
                                             .font(.system(size: 11.5))
                                             .foregroundStyle(EchoTheme.textSecondary)
                                             .lineLimit(1)
-                                        HStack(spacing: 6) {
-                                            Text(result.directorySource)
-                                                .font(.system(size: 8.5, weight: .black, design: .monospaced))
-                                                .padding(.horizontal, 4.5)
-                                                .padding(.vertical, 1.5)
-                                                .background(EchoTheme.neoCyan.opacity(0.16))
-                                                .foregroundStyle(EchoTheme.neoCyan)
-                                                .clipShape(RoundedRectangle(cornerRadius: 3))
-                                            if let genre = result.genre {
-                                                Text(genre)
-                                                    .font(.system(size: 9.5, design: .monospaced))
-                                                    .foregroundStyle(EchoTheme.textMuted)
-                                                    .lineLimit(1)
-                                            }
-                                            if let count = result.episodeCount {
-                                                Text("· \(count) eps")
-                                                    .font(.system(size: 9.5, design: .monospaced))
-                                                    .foregroundStyle(EchoTheme.textMuted)
-                                            }
+                                    }
+
+                                    HStack(spacing: 5) {
+                                        Text(result.directorySource)
+                                            .font(.system(size: 8.5, weight: .black, design: .monospaced))
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 1.5)
+                                            .background(EchoTheme.neoCyan.opacity(0.16))
+                                            .foregroundStyle(EchoTheme.neoCyan)
+                                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                                        if let count = result.episodeCount {
+                                            Text("\(count) eps")
+                                                .font(.system(size: 9.5, design: .monospaced))
+                                                .foregroundStyle(EchoTheme.textMuted)
+                                        }
+                                        if let genre = result.genre {
+                                            Text("· \(genre)")
+                                                .font(.system(size: 9.5, design: .monospaced))
+                                                .foregroundStyle(EchoTheme.textMuted)
+                                                .lineLimit(1)
                                         }
                                     }
-
-                                    Spacer(minLength: 4)
-
-                                    // Compact "+" (Subscribe) / "✓" (Open) Icon Button
-                                    Button {
-                                        store.subscribeToPodcast(feedURL: result.feedURL, fallbackArtworkURL: result.artworkURL)
-                                    } label: {
-                                        Image(systemName: isSubscribed ? "checkmark" : "plus")
-                                            .font(.system(size: 13, weight: .black))
-                                            .frame(width: 30, height: 30)
-                                            .background(isSubscribed ? EchoTheme.neoMint.opacity(0.22) : EchoTheme.neoCyan.opacity(0.20))
-                                            .foregroundStyle(isSubscribed ? EchoTheme.neoMint : EchoTheme.neoCyan)
-                                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: EchoTheme.radiusSmall)
-                                                    .strokeBorder(isSubscribed ? EchoTheme.neoMint.opacity(0.6) : EchoTheme.neoCyan.opacity(0.55), lineWidth: 1)
-                                            )
-                                    }
-                                    .buttonStyle(.plain)
-                                    .help(isSubscribed
-                                          ? "Already subscribed to '\(result.title)'. Click to open its episode list."
-                                          : "Subscribe to '\(result.title)' and fetch its RSS episodes for playback and syncing.")
                                 }
                                 .padding(10)
                                 .background(EchoTheme.surface)
                                 .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard))
-                                .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusCard).strokeBorder(EchoTheme.border, lineWidth: 1))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: EchoTheme.radiusCard)
+                                        .strokeBorder(isSubscribed ? EchoTheme.neoMint.opacity(0.5) : EchoTheme.neoCyan.opacity(0.3), lineWidth: 1)
+                                )
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    store.openPodcastSearchPreview(result)
+                                }
                             }
                         }
                     }
                 }
 
-                // Subscribed Shows Grid
+                // Dedicated EnkeltEpisoder Section (Single Episodes downloaded without subscribing)
+                if !store.singleEpisodes.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .font(.system(size: 12))
+                                .foregroundStyle(EchoTheme.hiResGold)
+                            Text("ENKELTEPISODER (\(store.singleEpisodes.count))")
+                                .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                                .foregroundStyle(EchoTheme.hiResGold)
+                            Text("· Lastet ned uten abonnement")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(EchoTheme.textMuted)
+                            Spacer()
+                        }
+
+                        LazyVStack(spacing: 6) {
+                            ForEach(store.singleEpisodes) { ep in
+                                SingleEpisodeRowView(episode: ep)
+                            }
+                        }
+                    }
+                }
+
+                // Subscribed Shows Grid (Compact Small Cards while searching; Large Cover Cards normally)
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("SUBSCRIBED SHOWS (\(store.podcasts.count))")
+                    Text("SUBSCRIBED SHOWS (\(store.subscribedPodcasts.count))")
                         .font(.system(size: 10.5, weight: .bold, design: .monospaced))
                         .foregroundStyle(EchoTheme.neoMint)
 
-                    if store.podcasts.isEmpty {
+                    if store.subscribedPodcasts.isEmpty {
                         VStack(spacing: 10) {
                             Image(systemName: "mic.badge.plus")
                                 .font(.system(size: 36))
@@ -288,7 +331,7 @@ struct PodcastsView: View {
                             Text("No Subscribed Podcasts Yet")
                                 .font(.system(size: 16, weight: .bold))
                                 .foregroundStyle(EchoTheme.textPrimary)
-                            Text("Click + on any show above, search directories, paste an RSS URL, or import an OPML file. Each podcast lets you set how many latest episodes to keep synced.")
+                            Text("Click any show above to preview & download single episodes into EnkeltEpisoder, click + to subscribe, paste an RSS URL, or import an OPML file.")
                                 .font(.system(size: 12.5))
                                 .foregroundStyle(EchoTheme.textSecondary)
                                 .multilineTextAlignment(.center)
@@ -299,9 +342,15 @@ struct PodcastsView: View {
                         .background(EchoTheme.surface)
                         .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard))
                         .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusCard).strokeBorder(EchoTheme.border, lineWidth: 1))
+                    } else if hasSearchResults {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 255, maximum: 340), spacing: 10)], spacing: 10) {
+                            ForEach(store.subscribedPodcasts) { show in
+                                CompactPodcastShowCardView(show: show)
+                            }
+                        }
                     } else {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 185, maximum: 220), spacing: 16)], spacing: 16) {
-                            ForEach(store.podcasts) { show in
+                            ForEach(store.subscribedPodcasts) { show in
                                 PodcastShowCardView(show: show)
                             }
                         }
@@ -309,6 +358,13 @@ struct PodcastsView: View {
                 }
             }
             .padding(26)
+        }
+        .sheet(item: Binding(
+            get: { store.previewingPodcastResult },
+            set: { if $0 == nil { store.closePodcastSearchPreview() } }
+        )) { result in
+            PodcastSearchPreviewSheet(result: result)
+                .environment(store)
         }
     }
 
@@ -335,29 +391,14 @@ struct PodcastsView: View {
         } else {
             let connected = store.devices.filter(\.isConnected)
             if !connected.isEmpty {
-                Menu {
-                    ForEach(connected) { dev in
-                        Button("Sync Podcasts to \(dev.name)") {
+                NeoPrimaryMenuButton(title: "Sync Podcasts", icon: "arrow.triangle.2.circlepath") {
+                    connected.map { dev in
+                        .action(title: "Sync Podcasts to \(dev.name)", icon: dev.isVirtualWireless ? "iphone" : "sdcard.fill") {
                             store.selectActiveDevice(dev.id)
                             store.startSync(for: dev)
                         }
                     }
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .font(.system(size: 11.5, weight: .bold))
-                        Text("Sync Podcasts")
-                            .font(.system(size: 12, weight: .black))
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 8.5, weight: .black))
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7.5)
-                    .background(EchoTheme.accentGradient)
-                    .foregroundStyle(.black)
-                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
                 }
-                .menuStyle(.borderlessButton)
                 .fixedSize()
                 .help("Pick a connected destination and sync your selected podcasts immediately.")
             } else {
@@ -372,13 +413,404 @@ struct PodcastsView: View {
             Image(systemName: icon)
                 .font(.system(size: 13, weight: .semibold))
                 .frame(width: 32, height: 32)
-                .background(EchoTheme.surfaceElevated)
+                .background(
+                    ZStack {
+                        EchoTheme.surfaceElevated
+                        EchoTheme.neoMint.opacity(0.06)
+                    }
+                )
                 .foregroundStyle(color)
-                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
-                .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.borderStrong, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                        .strokeBorder(EchoTheme.neoMint.opacity(0.50), lineWidth: 1)
+                )
         }
         .buttonStyle(.plain)
         .help(tip)
+    }
+}
+
+struct SingleEpisodeRowView: View {
+    @Environment(EchoStore.self) private var store
+    let episode: PodcastEpisode
+    @State private var isHovered = false
+
+    var body: some View {
+        let syncReason = store.episodeSyncReason(episode)
+        let destBadges = store.destinations(forEpisode: episode)
+
+        HStack(spacing: 12) {
+            ZStack {
+                ArtworkView(hash: episode.artworkHash, artworkCache: store.artworkCache, cornerRadius: EchoTheme.radiusSmall, iconSize: 16)
+                    .frame(width: 40, height: 40)
+                if isHovered {
+                    RoundedRectangle(cornerRadius: EchoTheme.radiusSmall)
+                        .fill(Color.black.opacity(0.55))
+                        .frame(width: 40, height: 40)
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(EchoTheme.neoMint)
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { store.playEpisode(episode) }
+            .help("Play '\(episode.title)' immediately.")
+
+            VStack(alignment: .leading, spacing: 2.5) {
+                HStack(spacing: 6) {
+                    Text(episode.title)
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(EchoTheme.textPrimary)
+                        .lineLimit(1)
+                    Text("ENKELT")
+                        .font(.system(size: 8, weight: .black, design: .monospaced))
+                        .padding(.horizontal, 4.5)
+                        .padding(.vertical, 1.5)
+                        .background(EchoTheme.hiResGold.opacity(0.18))
+                        .foregroundStyle(EchoTheme.hiResGold)
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
+                HStack(spacing: 6) {
+                    Text(episode.showTitle)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(EchoTheme.neoCyan)
+                        .lineLimit(1)
+                    if let pub = episode.publishedAt {
+                        Text("· \(pub.formatted(date: .abbreviated, time: .omitted))")
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(EchoTheme.textMuted)
+                    }
+                    if episode.duration > 0 {
+                        Text("· \(Formatters.duration(episode.duration))")
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(EchoTheme.textMuted)
+                    }
+                    if !destBadges.isEmpty {
+                        DestinationBadgeStrip(badges: destBadges)
+                    }
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            // Compact S sync toggle (same style as tracks)
+            Button {
+                store.toggleEpisodeSync(episode)
+            } label: {
+                Text("S")
+                    .font(.system(size: 10.5, weight: .black, design: .monospaced))
+                    .frame(width: 24, height: 24)
+                    .background(syncReason != nil ? EchoTheme.neoMint.opacity(0.22) : EchoTheme.surfaceElevated)
+                    .foregroundStyle(syncReason != nil ? EchoTheme.neoMint : EchoTheme.textMuted)
+                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: EchoTheme.radiusSmall)
+                            .strokeBorder(syncReason != nil ? EchoTheme.neoMint.opacity(0.7) : EchoTheme.border, lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help(syncReason != nil
+                  ? "Pinned for sync to active destination. Click to unpin."
+                  : "Pin this single episode to sync to the active destination (FiiO, SD card, iPhone/iPad).")
+
+            if !store.devices.isEmpty {
+                Menu {
+                    ForEach(store.devices) { dev in
+                        let assigned = store.episodeSyncReason(episode, on: dev) != nil
+                        Button {
+                            store.toggleEpisodeSync(episode, onDeviceID: dev.id)
+                        } label: {
+                            HStack {
+                                Text(dev.name)
+                                if assigned { Image(systemName: "checkmark") }
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 12))
+                        .foregroundStyle(EchoTheme.textMuted)
+                        .frame(width: 24, height: 24)
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 24)
+                .help("Assign this single episode to any destination.")
+            }
+
+            Button(role: .destructive) {
+                store.removeSingleEpisode(episode)
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(EchoTheme.dangerCoral.opacity(0.85))
+                    .frame(width: 26, height: 26)
+                    .background(EchoTheme.dangerCoral.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+            }
+            .buttonStyle(.plain)
+            .help("Remove '\(episode.title)' from EnkeltEpisoder and delete local audio file.")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(isHovered ? EchoTheme.surfaceElevated : EchoTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+        .overlay(
+            RoundedRectangle(cornerRadius: EchoTheme.radiusControl)
+                .strokeBorder(syncReason != nil ? EchoTheme.neoMint.opacity(0.35) : EchoTheme.hiResGold.opacity(0.25), lineWidth: 1)
+        )
+        .onHover { isHovered = $0 }
+    }
+}
+
+struct PodcastSearchPreviewSheet: View {
+    @Environment(EchoStore.self) private var store
+    let result: PodcastSearchResult
+
+    var body: some View {
+        let isSubscribed = store.subscribedPodcasts.contains { $0.feedURL.caseInsensitiveCompare(result.feedURL) == .orderedSame }
+
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack(alignment: .top, spacing: 16) {
+                AsyncImage(url: result.artworkURL.flatMap(URL.init(string:))) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().aspectRatio(contentMode: .fill)
+                    default:
+                        ZStack {
+                            EchoTheme.surfaceElevated
+                            Image(systemName: "mic.fill").font(.system(size: 28)).foregroundStyle(EchoTheme.neoCyan)
+                        }
+                    }
+                }
+                .frame(width: 88, height: 88)
+                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard))
+                .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusCard).strokeBorder(EchoTheme.borderStrong, lineWidth: 1))
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("FORHÅNDSVISNING · LAST NED ENKELTEPISODER UTEN ABONNEMENT")
+                        .font(.system(size: 9.5, weight: .black, design: .monospaced))
+                        .foregroundStyle(EchoTheme.hiResGold)
+                    Text(store.previewingPodcastShow?.title ?? result.title)
+                        .font(.system(size: 20, weight: .black, design: .rounded))
+                        .foregroundStyle(EchoTheme.textPrimary)
+                        .lineLimit(2)
+                    Text(store.previewingPodcastShow?.author ?? result.author)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(EchoTheme.neoCyan)
+
+                    HStack(spacing: 8) {
+                        Button {
+                            store.subscribeToPodcast(feedURL: result.feedURL, fallbackArtworkURL: result.artworkURL)
+                            store.closePodcastSearchPreview()
+                        } label: {
+                            Label(isSubscribed ? "Subscribed" : "Subscribe to Full Show", systemImage: isSubscribed ? "checkmark" : "plus")
+                                .font(.system(size: 12, weight: .bold))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6.5)
+                                .background(isSubscribed ? EchoTheme.neoMint.opacity(0.22) : EchoTheme.neoMint)
+                                .foregroundStyle(isSubscribed ? EchoTheme.neoMint : .black)
+                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                        }
+                        .buttonStyle(.plain)
+
+                        Button("Close") {
+                            store.closePodcastSearchPreview()
+                        }
+                        .font(.system(size: 12, weight: .semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6.5)
+                        .background(EchoTheme.surfaceElevated)
+                        .foregroundStyle(EchoTheme.textSecondary)
+                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.top, 4)
+                }
+                Spacer()
+            }
+            .padding(20)
+            .background(EchoTheme.surface)
+
+            Divider().overlay(EchoTheme.border)
+
+            if store.isLoadingPodcastPreview {
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("Henter episoder fra RSS-feed...")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(EchoTheme.textSecondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let err = store.podcastPreviewError {
+                VStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 28))
+                        .foregroundStyle(EchoTheme.warningAmber)
+                    Text("Kunne ikke hente episoder: \(err)")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(EchoTheme.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let previewShow = store.previewingPodcastShow {
+                ScrollView {
+                    LazyVStack(spacing: 6) {
+                        ForEach(previewShow.episodes) { ep in
+                            let isSaved = store.isSavedAsSingleEpisode(ep)
+                            let isDownloading = store.downloadingEpisodeIDs.contains(ep.id)
+
+                            HStack(spacing: 12) {
+                                Button {
+                                    store.downloadSingleEpisode(ep, autoPlay: true)
+                                } label: {
+                                    ZStack {
+                                        RoundedRectangle(cornerRadius: EchoTheme.radiusSmall)
+                                            .fill(EchoTheme.neoMint.opacity(0.16))
+                                            .frame(width: 30, height: 30)
+                                        Image(systemName: "play.fill")
+                                            .font(.system(size: 10.5, weight: .bold))
+                                            .foregroundStyle(EchoTheme.neoMint)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .help("Last ned til EnkeltEpisoder og spill av.")
+
+                                VStack(alignment: .leading, spacing: 2.5) {
+                                    Text(ep.title)
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(EchoTheme.textPrimary)
+                                        .lineLimit(2)
+                                    HStack(spacing: 6) {
+                                        if let pub = ep.publishedAt {
+                                            Text(pub.formatted(date: .abbreviated, time: .omitted))
+                                                .font(.system(size: 10.5, design: .monospaced))
+                                                .foregroundStyle(EchoTheme.textMuted)
+                                        }
+                                        if ep.duration > 0 {
+                                            Text("· \(Formatters.duration(ep.duration))")
+                                                .font(.system(size: 10.5, design: .monospaced))
+                                                .foregroundStyle(EchoTheme.textMuted)
+                                        }
+                                    }
+                                }
+
+                                Spacer(minLength: 8)
+
+                                if isDownloading {
+                                    ProgressView().controlSize(.small).frame(width: 28)
+                                } else if isSaved {
+                                    Label("EnkeltEpisoder", systemImage: "checkmark.circle.fill")
+                                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 5)
+                                        .background(EchoTheme.hiResGold.opacity(0.18))
+                                        .foregroundStyle(EchoTheme.hiResGold)
+                                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                } else {
+                                    Button {
+                                        store.downloadSingleEpisode(ep, autoPlay: false, pinToActiveDevice: false)
+                                    } label: {
+                                        Label("Last ned", systemImage: "arrow.down.circle")
+                                            .font(.system(size: 11, weight: .bold))
+                                            .padding(.horizontal, 9)
+                                            .padding(.vertical, 5)
+                                            .background(EchoTheme.surfaceElevated)
+                                            .foregroundStyle(EchoTheme.neoCyan)
+                                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                            .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(EchoTheme.neoCyan.opacity(0.45), lineWidth: 1))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Last ned denne episoden til EnkeltEpisoder uten å abonnere på showet.")
+
+                                    Button {
+                                        store.downloadSingleEpisode(ep, autoPlay: false, pinToActiveDevice: true)
+                                    } label: {
+                                        Text("S")
+                                            .font(.system(size: 10.5, weight: .black, design: .monospaced))
+                                            .frame(width: 26, height: 26)
+                                            .background(EchoTheme.neoMint.opacity(0.18))
+                                            .foregroundStyle(EchoTheme.neoMint)
+                                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                            .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(EchoTheme.neoMint.opacity(0.55), lineWidth: 1))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Last ned til EnkeltEpisoder og merk for sync til valgt enhet.")
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 9)
+                            .background(EchoTheme.surface)
+                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                            .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.border, lineWidth: 1))
+                        }
+                    }
+                    .padding(16)
+                }
+                .background(EchoTheme.canvas)
+            }
+        }
+        .frame(minWidth: 660, minHeight: 520)
+        .background(EchoTheme.canvas)
+    }
+}
+
+struct CompactPodcastShowCardView: View {
+    @Environment(EchoStore.self) private var store
+    let show: PodcastShow
+
+    var body: some View {
+        let isSyncedOnActive = store.isPodcastShowSelected(show)
+
+        HStack(spacing: 10) {
+            ArtworkView(hash: show.artworkHash, artworkCache: store.artworkCache, cornerRadius: EchoTheme.radiusSmall, iconSize: 18)
+                .frame(width: 46, height: 46)
+
+            VStack(alignment: .leading, spacing: 2.5) {
+                Text(show.title)
+                    .font(.system(size: 12.5, weight: .bold))
+                    .foregroundStyle(EchoTheme.textPrimary)
+                    .lineLimit(1)
+                Text(show.author)
+                    .font(.system(size: 11))
+                    .foregroundStyle(EchoTheme.textSecondary)
+                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    Text("\(show.episodes.count) eps")
+                        .font(.system(size: 9.5, design: .monospaced))
+                        .foregroundStyle(EchoTheme.textMuted)
+                    Text(show.episodesToKeep == 0 ? "KEEP ALL" : "KEEP \(show.episodesToKeep)")
+                        .font(.system(size: 8.5, weight: .black, design: .monospaced))
+                        .padding(.horizontal, 4.5)
+                        .padding(.vertical, 1)
+                        .background(EchoTheme.neoCyan.opacity(0.14))
+                        .foregroundStyle(EchoTheme.neoCyan)
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
+            }
+            Spacer(minLength: 4)
+
+            SyncStatePillButton(
+                state: isSyncedOnActive ? .full : .none,
+                compact: true,
+                tooltip: isSyncedOnActive
+                    ? "Remove '\(show.title)' from active destination's auto-sync."
+                    : "Include latest \(show.episodesToKeep == 0 ? "all" : "\(show.episodesToKeep)") episodes of '\(show.title)' when syncing."
+            ) {
+                store.togglePodcastShowSync(show)
+            }
+        }
+        .padding(8)
+        .background(EchoTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard))
+        .overlay(
+            RoundedRectangle(cornerRadius: EchoTheme.radiusCard)
+                .strokeBorder(isSyncedOnActive ? EchoTheme.neoMint.opacity(0.45) : EchoTheme.border, lineWidth: 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { store.navigate(to: .podcastDetail(show.id)) }
     }
 }
 
@@ -550,62 +982,53 @@ struct PodcastDetailView: View {
                                     }
 
                                     // Per-Podcast Episodes-to-Keep Picker (auto-throws out old episodes when new ones sync!)
-                                    Menu {
-                                        ForEach([1, 2, 3, 5, 10, 15, 25, 0], id: \.self) { count in
-                                            Button {
+                                    NeoMenuButton {
+                                        [1, 2, 3, 5, 10, 15, 25, 0].map { count in
+                                            .action(
+                                                title: count == 0 ? "Keep All Episodes" : "Keep Latest \(count) Episode\(count == 1 ? "" : "s")",
+                                                isSelected: show.episodesToKeep == count
+                                            ) {
                                                 store.setPodcastEpisodesToKeep(show, count: count)
-                                            } label: {
-                                                HStack {
-                                                    Text(count == 0 ? "Keep All Episodes" : "Keep Latest \(count) Episode\(count == 1 ? "" : "s")")
-                                                    if show.episodesToKeep == count { Image(systemName: "checkmark") }
-                                                }
                                             }
                                         }
-                                    } label: {
-                                        HStack(spacing: 5) {
+                                    } label: { isHovered in
+                                        HStack(spacing: 5.5) {
                                             Image(systemName: "clock.arrow.2.circlepath")
                                                 .font(.system(size: 11, weight: .bold))
-                                                .foregroundStyle(EchoTheme.neoCyan)
+                                                .foregroundStyle(EchoTheme.neoMint)
                                             Text(show.episodesToKeep == 0 ? "Keep: All" : "Keep: \(show.episodesToKeep)")
                                                 .font(.system(size: 11.5, weight: .bold))
                                                 .foregroundStyle(EchoTheme.textPrimary)
                                             Image(systemName: "chevron.down")
                                                 .font(.system(size: 8.5, weight: .bold))
-                                                .foregroundStyle(EchoTheme.textMuted)
+                                                .foregroundStyle(EchoTheme.neoMint.opacity(isHovered ? 0.95 : 0.72))
                                         }
                                         .padding(.horizontal, 10)
                                         .padding(.vertical, 6.5)
-                                        .background(EchoTheme.surfaceElevated)
-                                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
-                                        .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.neoCyan.opacity(0.45), lineWidth: 1))
+                                        .background(
+                                            ZStack {
+                                                EchoTheme.surfaceElevated
+                                                EchoTheme.neoMint.opacity(isHovered ? 0.14 : 0.05)
+                                            }
+                                        )
+                                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                                                .strokeBorder(EchoTheme.neoMint.opacity(isHovered ? 0.90 : 0.55), lineWidth: 1)
+                                        )
                                     }
-                                    .menuStyle(.borderlessButton)
                                     .fixedSize()
                                     .help("Per-podcast retention limit: choose how many latest episodes of '\(show.title)' to keep on your player. Syncing newer episodes automatically removes older ones beyond this count.")
 
                                     if !store.devices.isEmpty {
-                                        Menu {
-                                            ForEach(store.devices) { dev in
+                                        NeoIconMenuButton(icon: "square.stack.3d.up", accent: EchoTheme.neoMint, size: 30) {
+                                            store.devices.map { dev in
                                                 let selected = store.isPodcastShowSelected(show, on: dev)
-                                                Button {
+                                                return .action(title: dev.name, icon: dev.isVirtualWireless ? "iphone" : "sdcard.fill", isSelected: selected) {
                                                     store.togglePodcastShowSync(show, onDeviceID: dev.id)
-                                                } label: {
-                                                    HStack {
-                                                        Text(dev.name)
-                                                        if selected { Image(systemName: "checkmark") }
-                                                    }
                                                 }
                                             }
-                                        } label: {
-                                            Image(systemName: "square.stack.3d.up")
-                                                .font(.system(size: 12.5, weight: .semibold))
-                                                .frame(width: 30, height: 30)
-                                                .background(EchoTheme.surfaceElevated)
-                                                .foregroundStyle(EchoTheme.neoCyan)
-                                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
-                                                .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.border, lineWidth: 1))
                                         }
-                                        .menuStyle(.borderlessButton)
                                         .fixedSize()
                                         .help("Assign or remove '\(show.title)' across multiple sync destinations.")
                                     }
@@ -618,29 +1041,14 @@ struct PodcastDetailView: View {
                                     } else {
                                         let connected = store.devices.filter(\.isConnected)
                                         if !connected.isEmpty {
-                                            Menu {
-                                                ForEach(connected) { dev in
-                                                    Button("Sync to \(dev.name)") {
+                                            NeoPrimaryMenuButton(title: "Sync Now", icon: "arrow.triangle.2.circlepath") {
+                                                connected.map { dev in
+                                                    .action(title: "Sync to \(dev.name)", icon: dev.isVirtualWireless ? "iphone" : "sdcard.fill") {
                                                         store.selectActiveDevice(dev.id)
                                                         store.startSync(for: dev)
                                                     }
                                                 }
-                                            } label: {
-                                                HStack(spacing: 5) {
-                                                    Image(systemName: "arrow.triangle.2.circlepath")
-                                                        .font(.system(size: 11.5, weight: .bold))
-                                                    Text("Sync Now")
-                                                        .font(.system(size: 12, weight: .black))
-                                                    Image(systemName: "chevron.down")
-                                                        .font(.system(size: 8.5, weight: .black))
-                                                }
-                                                .padding(.horizontal, 12)
-                                                .padding(.vertical, 7.5)
-                                                .background(EchoTheme.accentGradient)
-                                                .foregroundStyle(.black)
-                                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
                                             }
-                                            .menuStyle(.borderlessButton)
                                             .fixedSize()
                                             .help("Choose a connected destination and sync '\(show.title)' now.")
                                         }

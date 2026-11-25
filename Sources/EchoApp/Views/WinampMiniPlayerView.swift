@@ -35,14 +35,19 @@ private struct MiniPlayerWindowConfigurator: NSViewRepresentable {
         window.isMovableByWindowBackground = true
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.backgroundColor = NSColor(red: 0.08, green: 0.09, blue: 0.12, alpha: 1)
+        window.titlebarSeparatorStyle = .none
+        window.styleMask.remove(.fullSizeContentView)
+        window.standardWindowButton(.closeButton)?.isHidden = false
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = false
+        window.standardWindowButton(.zoomButton)?.isHidden = true
+        window.backgroundColor = NSColor(red: 0.105, green: 0.120, blue: 0.160, alpha: 1)
 
         let modeKey = isShadeMode ? "shade" : (showPlaylistDrawer ? "expanded" : "deck")
 
         // Save user's custom dragged height before leaving expanded playlist mode
         if coordinator.lastLayoutMode == "expanded" && modeKey != "expanded" {
-            let currentH = window.contentLayoutRect.height
-            if currentH >= 300 {
+            let currentH = window.contentRect(forFrameRect: window.frame).height
+            if currentH >= 290 {
                 coordinator.savedExpandedHeight = currentH
             }
         }
@@ -56,9 +61,9 @@ private struct MiniPlayerWindowConfigurator: NSViewRepresentable {
             maxH = 62
             targetH = 62
         } else if !showPlaylistDrawer {
-            minH = 198
-            maxH = 198
-            targetH = 198
+            minH = 196
+            maxH = 196
+            targetH = 196
         } else {
             minH = 300
             maxH = 4000
@@ -70,12 +75,13 @@ private struct MiniPlayerWindowConfigurator: NSViewRepresentable {
 
         if let targetH, coordinator.lastLayoutMode != modeKey {
             // Keep top edge anchored just like classic Winamp Windowshade / PL toggle
-            var frame = window.frame
-            let newFrameSize = window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: frame.width, height: targetH)).size
-            let deltaH = newFrameSize.height - frame.height
-            frame.origin.y -= deltaH
-            frame.size.height = newFrameSize.height
-            window.setFrame(frame, display: true, animate: !coordinator.lastLayoutMode.isEmpty)
+            let currentFrame = window.frame
+            let targetFrameSize = window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: currentFrame.width, height: targetH)).size
+            var nextFrame = currentFrame
+            let deltaH = targetFrameSize.height - currentFrame.height
+            nextFrame.origin.y -= deltaH
+            nextFrame.size.height = targetFrameSize.height
+            window.setFrame(nextFrame, display: true, animate: !coordinator.lastLayoutMode.isEmpty)
         }
 
         coordinator.lastLayoutMode = modeKey
@@ -85,6 +91,7 @@ private struct MiniPlayerWindowConfigurator: NSViewRepresentable {
 struct WinampMiniPlayerView: View {
     @Environment(EchoStore.self) private var store
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismiss) private var dismiss
 
     @State private var alwaysOnTop: Bool = true
     @State private var isShadeMode: Bool = false
@@ -138,8 +145,8 @@ struct WinampMiniPlayerView: View {
         .frame(
             minWidth: 396,
             maxWidth: 480,
-            minHeight: isShadeMode ? 62 : (showPlaylistDrawer ? 300 : 198),
-            maxHeight: isShadeMode ? 62 : (showPlaylistDrawer ? .infinity : 198),
+            minHeight: isShadeMode ? 62 : (showPlaylistDrawer ? 300 : 196),
+            maxHeight: isShadeMode ? 62 : (showPlaylistDrawer ? .infinity : 196),
             alignment: .top
         )
         .background(chassisBG)
@@ -168,33 +175,43 @@ struct WinampMiniPlayerView: View {
         }
     }
 
-    // MARK: - Classic Winamp Title Bar
+    // MARK: - Authentic Winamp 2.x Classic Top Bar (Replaces macOS Titlebar)
 
     private func winampTitleBar(track: Track?) -> some View {
         HStack(spacing: 6) {
-            // Left grill bars
+            // Classic Winamp top-left bolt/waveform emblem box
+            ZStack {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.black.opacity(0.45))
+                    .frame(width: 18, height: 16)
+                    .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(bevelLight, lineWidth: 0.8))
+                Image(systemName: "waveform")
+                    .font(.system(size: 9, weight: .black))
+                    .foregroundStyle(lcdPrimary)
+            }
+
             winampGrillLines
-                .frame(width: 26)
+                .frame(width: 28)
 
-            Image(systemName: "waveform")
-                .font(.system(size: 9.5, weight: .black))
-                .foregroundStyle(lcdPrimary)
-
-            Text("MY ECHO · MINI DECK")
-                .font(.system(size: 9.5, weight: .black, design: .monospaced))
-                .tracking(1.1)
-                .foregroundStyle(Color.white.opacity(0.88))
+            // Classic embossed Winamp center-left wordmark
+            Text("MY ECHO")
+                .font(.system(size: 10.5, weight: .black, design: .monospaced))
+                .tracking(1.6)
+                .foregroundStyle(Color.white.opacity(0.95))
+                .shadow(color: .black.opacity(0.8), radius: 0, x: 0, y: 1)
+                .lineLimit(1)
+                .fixedSize()
 
             winampGrillLines
                 .frame(maxWidth: .infinity)
 
-            // Skin Toggle (Classic Winamp vs Active Echo Theme)
+            // Skin Toggle (Classic Winamp 99 vs Active Echo Theme)
             titleMicroButton(
                 label: useClassicWinampSkin ? "99" : "THM",
                 active: useClassicWinampSkin,
                 tip: useClassicWinampSkin
-                    ? "Classic Winamp 99 phosphor green skin active. Click to match your active Echo app theme."
-                    : "Matching active Echo theme. Click to switch to the classic 1999 Winamp phosphor skin."
+                    ? "Classic Winamp 99 phosphor green skin active. Click to match your active My Echo theme."
+                    : "Matching active My Echo theme. Click to switch to the classic 1999 Winamp phosphor skin."
             ) {
                 useClassicWinampSkin.toggle()
             }
@@ -223,39 +240,61 @@ struct WinampMiniPlayerView: View {
                 }
             }
 
-            // Return / Focus Full Echo Window
+            // Return / Focus Full My Echo Window
             titleMicroButton(
                 icon: "arrow.up.left.and.arrow.down.right",
                 active: false,
-                tip: "Focus or reopen the full Echo Music Studio window."
+                tip: "Focus or reopen the full My Echo Studio window."
             ) {
-                if let mainWin = NSApp.windows.first(where: { $0.title == "My Echo" }) {
-                    mainWin.makeKeyAndOrderFront(nil)
-                    NSApp.activate(ignoringOtherApps: true)
-                } else {
-                    openWindow(id: "main-studio")
-                }
+                focusMainWindow()
             }
+
+            // Classic Winamp Top-Right Beveled Close Button
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8.5, weight: .black))
+                    .foregroundStyle(EchoTheme.dangerCoral)
+                    .frame(width: 20, height: 16)
+                    .background(
+                        LinearGradient(
+                            colors: [EchoTheme.dangerCoral.opacity(0.28), Color.black.opacity(0.45)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 2))
+                    .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(EchoTheme.dangerCoral.opacity(0.65), lineWidth: 0.9))
+            }
+            .buttonStyle(.plain)
+            .help("Close the Mini Player window (music keeps playing in My Echo).")
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 12)
+        .frame(height: 28)
         .background(
             LinearGradient(
-                colors: [Color(red: 0.19, green: 0.22, blue: 0.30), Color(red: 0.10, green: 0.12, blue: 0.17)],
+                colors: useClassicWinampSkin
+                    ? [Color(red: 0.23, green: 0.27, blue: 0.38), Color(red: 0.12, green: 0.15, blue: 0.22), Color(red: 0.08, green: 0.10, blue: 0.15)]
+                    : [EchoTheme.surfaceElevated, EchoTheme.sidebar],
                 startPoint: .top,
                 endPoint: .bottom
             )
         )
+        .overlay(alignment: .top) {
+            Rectangle().fill(Color.white.opacity(0.28)).frame(height: 1)
+        }
         .overlay(alignment: .bottom) {
-            Rectangle().fill(bevelDark).frame(height: 1)
+            Rectangle().fill(bevelDark).frame(height: 1.5)
         }
     }
 
     private var winampGrillLines: some View {
         VStack(spacing: 2) {
-            Rectangle().fill(lcdSecondary.opacity(0.55)).frame(height: 1)
-            Rectangle().fill(Color.white.opacity(0.18)).frame(height: 1)
-            Rectangle().fill(lcdSecondary.opacity(0.35)).frame(height: 1)
+            Rectangle().fill(lcdSecondary.opacity(0.75)).frame(height: 1)
+            Rectangle().fill(Color.black.opacity(0.65)).frame(height: 1)
+            Rectangle().fill(lcdSecondary.opacity(0.50)).frame(height: 1)
+            Rectangle().fill(Color.white.opacity(0.16)).frame(height: 1)
         }
     }
 
@@ -365,10 +404,38 @@ struct WinampMiniPlayerView: View {
                                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                                 .foregroundStyle(lcdPrimary)
                                 .lineLimit(1)
-                            Text(track.map { "\($0.artist) · \($0.effectiveAlbum)" } ?? "Drop songs or double-click any track")
-                                .font(.system(size: 9.5, design: .monospaced))
-                                .foregroundStyle(lcdPrimary.opacity(0.72))
-                                .lineLimit(1)
+                            if let track {
+                                HStack(spacing: 4) {
+                                    ArtistLinksView(
+                                        rawArtists: track.artist,
+                                        font: .system(size: 9.5, design: .monospaced),
+                                        color: lcdPrimary.opacity(0.76),
+                                        hoverColor: lcdPrimary,
+                                        separatorColor: lcdPrimary.opacity(0.45)
+                                    ) { artistName in
+                                        focusMainWindow()
+                                        store.openArtist(name: artistName)
+                                    }
+                                    Text("·")
+                                        .font(.system(size: 9.5, design: .monospaced))
+                                        .foregroundStyle(lcdPrimary.opacity(0.45))
+                                    HoverLinkText(
+                                        text: track.effectiveAlbum,
+                                        font: .system(size: 9.5, design: .monospaced),
+                                        color: lcdPrimary.opacity(0.68),
+                                        hoverColor: lcdSecondary,
+                                        tip: "Open album '\(track.effectiveAlbum)' in My Echo"
+                                    ) {
+                                        focusMainWindow()
+                                        store.openAlbum(forTrack: track)
+                                    }
+                                }
+                            } else {
+                                Text("Drop songs or double-click any track")
+                                    .font(.system(size: 9.5, design: .monospaced))
+                                    .foregroundStyle(lcdPrimary.opacity(0.72))
+                                    .lineLimit(1)
+                            }
                         }
                     }
                     .padding(.horizontal, 6)
@@ -656,6 +723,15 @@ struct WinampMiniPlayerView: View {
         }
         .buttonStyle(.plain)
         .help(tip)
+    }
+
+    private func focusMainWindow() {
+        if let mainWin = NSApp.windows.first(where: { $0.title == "My Echo" }) {
+            mainWin.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        } else {
+            openWindow(id: "main-studio")
+        }
     }
 
     private func formattedClock(player: AudioPlayerEngine) -> String {

@@ -1,5 +1,87 @@
 import SwiftUI
+import AppKit
 import EchoCore
+
+/// Interactive hover-underlined link for Artist and Album names across tables, cards, and player chrome
+struct HoverLinkText: View {
+    let text: String
+    var font: Font = .system(size: 11.5)
+    var color: Color = EchoTheme.textSecondary
+    var hoverColor: Color = EchoTheme.neoMint
+    var tip: String? = nil
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(text)
+                .font(font)
+                .foregroundStyle(isHovered ? hoverColor : color)
+                .underline(isHovered)
+                .lineLimit(1)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovered = hovering
+            if hovering {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+        .help(tip ?? "Open \(text)")
+    }
+}
+
+/// Splits multi-artist credit strings ("Alan Walker, Noah Cyrus, Digital Farm Animals, Juliander")
+/// and renders each artist as its own independently hoverable & clickable link.
+struct ArtistLinksView: View {
+    let rawArtists: String
+    var font: Font = .system(size: 11.5)
+    var color: Color = EchoTheme.textSecondary
+    var hoverColor: Color = EchoTheme.neoMint
+    var separatorColor: Color = EchoTheme.textMuted
+    let onSelectArtist: (String) -> Void
+
+    var body: some View {
+        let segments = ArtistNameParser.splitSegments(rawArtists)
+        if segments.count <= 1 {
+            let name = segments.first?.name ?? rawArtists
+            HoverLinkText(
+                text: name,
+                font: font,
+                color: color,
+                hoverColor: hoverColor,
+                tip: "Go to artist '\(name)'"
+            ) {
+                onSelectArtist(name)
+            }
+        } else {
+            HStack(spacing: 0) {
+                ForEach(Array(segments.enumerated()), id: \.offset) { _, seg in
+                    HoverLinkText(
+                        text: seg.name,
+                        font: font,
+                        color: color,
+                        hoverColor: hoverColor,
+                        tip: "Go to artist '\(seg.name)'"
+                    ) {
+                        onSelectArtist(seg.name)
+                    }
+                    if !seg.trailingSeparator.isEmpty {
+                        Text(seg.trailingSeparator)
+                            .font(font)
+                            .foregroundStyle(separatorColor)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                }
+            }
+            .lineLimit(1)
+        }
+    }
+}
 
 struct ArtworkView: View {
     let hash: String?
@@ -132,18 +214,52 @@ struct DestinationBadgeStrip: View {
 struct FormatBadge: View {
     let track: Track
     var isUnsupported: Bool = false
+    var compact: Bool = false
 
     var body: some View {
-        HStack(spacing: 3) {
-            if isUnsupported {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 8))
+        Group {
+            if compact {
+                HStack(alignment: .firstTextBaseline, spacing: 3.5) {
+                    if isUnsupported {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 8))
+                    }
+                    Text(track.formatPrimaryLabel)
+                        .font(.system(size: 9.5, weight: .black, design: .monospaced))
+                        .tracking(0.4)
+                    if let detail = track.formatDetailLabel {
+                        Text(detail)
+                            .font(.system(size: 7.5, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(foregroundColor.opacity(0.82))
+                    }
+                }
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2.5)
+            } else {
+                VStack(alignment: .center, spacing: 0.5) {
+                    HStack(spacing: 3) {
+                        if isUnsupported {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 8))
+                        }
+                        Text(track.formatPrimaryLabel)
+                            .font(.system(size: 10, weight: .black, design: .monospaced))
+                            .tracking(0.6)
+                    }
+                    if let detail = track.formatDetailLabel {
+                        Text(detail)
+                            .font(.system(size: 7.5, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(foregroundColor.opacity(0.82))
+                            .lineLimit(1)
+                    }
+                }
+                .fixedSize()
+                .padding(.horizontal, 6.5)
+                .padding(.vertical, 2.5)
             }
-            Text(track.qualityLabel)
-                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2.5)
         .background(backgroundColor)
         .foregroundStyle(foregroundColor)
         .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
@@ -168,6 +284,104 @@ struct FormatBadge: View {
     }
 }
 
+/// Compact 5-bar online popularity equalizer + numeric score (0–100) with rich tooltip
+struct OnlinePopularityMeter: View {
+    let stats: TrackStats
+    var compact: Bool = false
+
+    var body: some View {
+        let filled = stats.popularityBars
+        let score = stats.onlinePopularity
+
+        HStack(spacing: 5) {
+            // 5-bar ascending retro LED popularity meter
+            HStack(alignment: .bottom, spacing: 1.5) {
+                ForEach(1...5, id: \.self) { level in
+                    let isLit = score != nil && level <= filled
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(isLit ? barColor(for: score ?? 0) : EchoTheme.textMuted.opacity(0.22))
+                        .frame(width: 2.5, height: CGFloat(4 + level * 2))
+                }
+            }
+            .frame(height: 14, alignment: .bottom)
+
+            if !compact {
+                if let score {
+                    Text("\(score)")
+                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                        .foregroundStyle(barColor(for: score))
+                        .frame(minWidth: 20, alignment: .trailing)
+                } else {
+                    Text("—")
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(EchoTheme.textMuted.opacity(0.5))
+                        .frame(minWidth: 20, alignment: .trailing)
+                }
+            }
+        }
+        .help(tooltipText)
+    }
+
+    private func barColor(for score: Int) -> Color {
+        if score >= 75 { return EchoTheme.neoMint }
+        if score >= 50 { return EchoTheme.neoCyan }
+        if score >= 25 { return EchoTheme.hiResGold }
+        return EchoTheme.textSecondary
+    }
+
+    private var tooltipText: String {
+        guard let score = stats.onlinePopularity else {
+            return "Online popularity not fetched yet. Open the album or click 'Fetch Online Popularity' in the menu."
+        }
+        var parts = ["Online popularity: \(score)/100"]
+        if let src = stats.onlineSource {
+            if src.contains("lastfm"), let plays = stats.onlinePlayCount {
+                parts.append("Last.fm global plays: \(Formatters.compactCount(plays))")
+                if let listeners = stats.onlineListeners, listeners > 0 {
+                    parts.append("\(Formatters.compactCount(listeners)) listeners")
+                }
+            } else if let rank = stats.onlinePlayCount {
+                parts.append("Deezer rank: \(Formatters.compactCount(rank))")
+            }
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// Compact personal play counter badge for TrackRowView
+struct UserPlayCountBadge: View {
+    let stats: TrackStats
+
+    var body: some View {
+        HStack(spacing: 3) {
+            if stats.userPlayCount > 0 {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 7.5))
+                    .foregroundStyle(EchoTheme.neoMint.opacity(0.85))
+                Text(Formatters.compactCount(stats.userPlayCount))
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(EchoTheme.textPrimary)
+            } else {
+                Text("0")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(EchoTheme.textMuted.opacity(0.45))
+            }
+        }
+        .help(tooltipText)
+    }
+
+    private var tooltipText: String {
+        if stats.userPlayCount == 0 {
+            return "Your plays: 0 (counts automatically after listening to 30s or half the track)."
+        }
+        let base = "Your plays: \(stats.userPlayCount)"
+        if let last = stats.lastPlayedAt {
+            return "\(base) · Last played \(last.formatted(date: .abbreviated, time: .shortened))"
+        }
+        return base
+    }
+}
+
 struct SyncStatePillButton: View {
     let state: SyncSelectionState
     var compact: Bool = false
@@ -177,26 +391,46 @@ struct SyncStatePillButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: iconName)
-                    .font(.system(size: compact ? 12 : 12.5, weight: .semibold))
-                if !compact {
+            if compact {
+                Text("S")
+                    .font(.system(size: 11, weight: .black, design: .monospaced))
+                    .frame(width: 24, height: 24)
+                    .background(compactBackground)
+                    .foregroundStyle(foreground)
+                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: EchoTheme.radiusSmall, style: .continuous)
+                            .strokeBorder(borderColor, lineWidth: state == .none ? 0.9 : 1.15)
+                    )
+                    .shadow(color: state == .full ? EchoTheme.neoMint.opacity(0.38) : Color.black.opacity(0.35), radius: 4)
+            } else {
+                HStack(spacing: 5) {
+                    Image(systemName: iconName)
+                        .font(.system(size: 12.5, weight: .semibold))
                     Text(buttonTitle)
                         .font(.system(size: 12, weight: .bold))
                 }
+                .padding(.horizontal, 11)
+                .padding(.vertical, 6.5)
+                .background(background)
+                .foregroundStyle(foreground)
+                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                        .strokeBorder(borderColor, lineWidth: 1)
+                )
             }
-            .padding(.horizontal, compact ? 6 : 11)
-            .padding(.vertical, compact ? 4.5 : 6.5)
-            .background(background)
-            .foregroundStyle(foreground)
-            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
-                    .strokeBorder(borderColor, lineWidth: 1)
-            )
         }
         .buttonStyle(.plain)
         .help(tooltip ?? defaultTooltip)
+    }
+
+    private var compactBackground: Color {
+        switch state {
+        case .full: return EchoTheme.neoMint.opacity(0.28)
+        case .partial: return EchoTheme.neoCyan.opacity(0.24)
+        case .none: return Color.black.opacity(0.68)
+        }
     }
 
     private var defaultTooltip: String {
@@ -248,11 +482,81 @@ struct SyncStatePillButton: View {
     }
 }
 
+/// Matching top-right corner `P` (Playlist) + `S` (Sync / Subscription) badge strip for Album and Artist cards.
+struct CardPSBadgeStrip: View {
+    let playlistState: SyncSelectionState
+    let syncState: SyncSelectionState
+    let isCardHovered: Bool
+    let playlistTooltip: String
+    let syncTooltip: String
+    let onTogglePlaylist: () -> Void
+    let onToggleSync: () -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if playlistState != .none || isCardHovered {
+                Button(action: onTogglePlaylist) {
+                    Text("P")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .frame(width: 24, height: 24)
+                        .background(
+                            RoundedRectangle(cornerRadius: EchoTheme.radiusSmall, style: .continuous)
+                                .fill(playlistBg)
+                        )
+                        .foregroundStyle(playlistFg)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: EchoTheme.radiusSmall, style: .continuous)
+                                .strokeBorder(playlistBorder, lineWidth: playlistState == .none ? 0.9 : 1.15)
+                        )
+                        .shadow(color: playlistState == .full ? EchoTheme.neoCyan.opacity(0.38) : Color.black.opacity(0.35), radius: 4)
+                }
+                .buttonStyle(.plain)
+                .help(playlistTooltip)
+            }
+
+            if syncState != .none || isCardHovered {
+                SyncStatePillButton(
+                    state: syncState,
+                    compact: true,
+                    tooltip: syncTooltip,
+                    action: onToggleSync
+                )
+            }
+        }
+    }
+
+    private var playlistBg: Color {
+        switch playlistState {
+        case .full: return EchoTheme.neoCyan.opacity(0.28)
+        case .partial: return EchoTheme.neoCyan.opacity(0.16)
+        case .none: return Color.black.opacity(0.68)
+        }
+    }
+
+    private var playlistFg: Color {
+        switch playlistState {
+        case .full: return EchoTheme.neoCyan
+        case .partial: return EchoTheme.neoCyan.opacity(0.85)
+        case .none: return EchoTheme.textPrimary.opacity(0.85)
+        }
+    }
+
+    private var playlistBorder: Color {
+        switch playlistState {
+        case .full: return EchoTheme.neoCyan.opacity(0.8)
+        case .partial: return EchoTheme.neoCyan.opacity(0.5)
+        case .none: return EchoTheme.borderStrong
+        }
+    }
+}
+
 struct NeoPrimaryButton: View {
     let title: String
     var icon: String? = nil
     var disabled: Bool = false
     let action: () -> Void
+
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
@@ -262,29 +566,396 @@ struct NeoPrimaryButton: View {
                         .font(.system(size: 11.5, weight: .bold))
                 }
                 Text(title)
-                    .font(.system(size: 12, weight: .black))
+                    .font(.system(size: 12, weight: .bold))
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 7.5)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 6.5)
             .background(
-                Group {
-                    if disabled {
-                        EchoTheme.surfaceElevated
-                    } else {
-                        EchoTheme.accentGradient
+                ZStack {
+                    EchoTheme.surfaceElevated.opacity(0.85)
+                    if !disabled {
+                        EchoTheme.neoMint.opacity(isHovered ? 0.26 : 0.18)
                     }
                 }
             )
-            .foregroundStyle(disabled ? EchoTheme.textMuted : Color.black)
+            .foregroundStyle(disabled ? EchoTheme.textMuted : EchoTheme.neoMint)
             .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
-                    .strokeBorder(disabled ? EchoTheme.border : EchoTheme.neoMint.opacity(0.8), lineWidth: 1)
+                    .strokeBorder(
+                        disabled ? EchoTheme.border : EchoTheme.neoMint.opacity(isHovered ? 0.90 : 0.65),
+                        lineWidth: 1
+                    )
             )
-            .shadow(color: disabled ? .clear : EchoTheme.neoMint.opacity(0.25), radius: 6, y: 1)
+            .shadow(color: disabled ? .clear : EchoTheme.neoMint.opacity(isHovered ? 0.28 : 0.14), radius: 5, y: 1)
         }
         .buttonStyle(.plain)
         .disabled(disabled)
+        .onHover { isHovered = $0 }
+    }
+}
+
+/// Matching dark-emerald + neon green outline label for primary action `Menu` controls.
+struct NeoPrimaryMenuLabel: View {
+    let title: String
+    let icon: String
+    var isHovered: Bool = false
+
+    var body: some View {
+        HStack(spacing: 5.5) {
+            Image(systemName: icon)
+                .font(.system(size: 11.5, weight: .bold))
+            Text(title)
+                .font(.system(size: 12, weight: .bold))
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8.5, weight: .bold))
+                .opacity(0.85)
+        }
+        .padding(.horizontal, 12.5)
+        .padding(.vertical, 6.5)
+        .background(
+            ZStack {
+                EchoTheme.surfaceElevated.opacity(0.85)
+                EchoTheme.neoMint.opacity(isHovered ? 0.26 : 0.18)
+            }
+        )
+        .foregroundStyle(EchoTheme.neoMint)
+        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                .strokeBorder(EchoTheme.neoMint.opacity(isHovered ? 0.90 : 0.65), lineWidth: 1)
+        )
+        .shadow(color: EchoTheme.neoMint.opacity(isHovered ? 0.28 : 0.14), radius: 5, y: 1)
+    }
+}
+
+// MARK: - AppKit-Proof Dark Neon Dropdowns, Pickers, Segmented Controls & Text Fields
+
+enum NeoMenuItem {
+    case action(
+        title: String,
+        icon: String? = nil,
+        isSelected: Bool = false,
+        isDestructive: Bool = false,
+        action: @MainActor () -> Void
+    )
+    case divider
+}
+
+@MainActor
+private final class NeoMenuItemTarget: NSObject {
+    let handler: @MainActor () -> Void
+
+    init(_ handler: @escaping @MainActor () -> Void) {
+        self.handler = handler
+    }
+
+    @objc func invoke(_ sender: Any?) {
+        handler()
+    }
+}
+
+private final class NeoMenuAnchorNSView: NSView {
+    override var isFlipped: Bool { true }
+}
+
+private struct NeoMenuAnchorRepresentable: NSViewRepresentable {
+    let onView: (NSView) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let v = NeoMenuAnchorNSView(frame: .zero)
+        DispatchQueue.main.async { onView(v) }
+        return v
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { onView(nsView) }
+    }
+}
+
+/// Pure SwiftUI trigger + native macOS `NSMenu` popup anchored cleanly below the control.
+/// Unlike SwiftUI `.menuStyle(.borderlessButton)`, AppKit never strips backgrounds, neon borders,
+/// status dots, or custom icon colors from the trigger label, and never injects a duplicate chevron.
+struct NeoMenuButton<Label: View>: View {
+    let items: () -> [NeoMenuItem]
+    let label: (_ isHovered: Bool) -> Label
+
+    @State private var isHovered = false
+    @State private var anchorView: NSView?
+
+    init(
+        items: @escaping () -> [NeoMenuItem],
+        @ViewBuilder label: @escaping (_ isHovered: Bool) -> Label
+    ) {
+        self.items = items
+        self.label = label
+    }
+
+    var body: some View {
+        Button {
+            presentMenu()
+        } label: {
+            label(isHovered)
+        }
+        .buttonStyle(.plain)
+        .background(
+            NeoMenuAnchorRepresentable { view in
+                anchorView = view
+            }
+            .allowsHitTesting(false)
+        )
+        .onHover { isHovered = $0 }
+    }
+
+    @MainActor
+    private func presentMenu() {
+        guard let view = anchorView else { return }
+        let menu = NSMenu()
+        menu.appearance = NSAppearance(named: .darkAqua)
+        menu.minimumWidth = max(view.bounds.width, 150)
+
+        for entry in items() {
+            switch entry {
+            case .divider:
+                menu.addItem(.separator())
+            case .action(let title, let icon, let isSelected, _, let handler):
+                let target = NeoMenuItemTarget(handler)
+                let item = NSMenuItem(
+                    title: title,
+                    action: #selector(NeoMenuItemTarget.invoke(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = target
+                item.representedObject = target // keep target strongly retained while menu is open
+                item.state = isSelected ? .on : .off
+                if let icon, let img = NSImage(systemSymbolName: icon, accessibilityDescription: title) {
+                    img.isTemplate = true
+                    item.image = img
+                }
+                menu.addItem(item)
+            }
+        }
+
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height + 4), in: view)
+    }
+}
+
+/// Primary emerald-neon dropdown menu button (used for `Sync to`, `Sync Podcasts`, `Order Artist`, etc.).
+struct NeoPrimaryMenuButton: View {
+    let title: String
+    let icon: String
+    let items: () -> [NeoMenuItem]
+
+    var body: some View {
+        NeoMenuButton(items: items) { isHovered in
+            NeoPrimaryMenuLabel(title: title, icon: icon, isHovered: isHovered)
+        }
+    }
+}
+
+/// Dark-slate + neon-green-outlined dropdown button for toolbars, pickers, and selectors.
+struct NeoPickerDropdown<Selection: Hashable>: View {
+    var prefix: String? = nil
+    var icon: String? = nil
+    var accent: Color = EchoTheme.neoMint
+    var fullWidth: Bool = false
+    @Binding var selection: Selection
+    let options: [(value: Selection, title: String)]
+
+    private var currentTitle: String {
+        options.first(where: { $0.value == selection })?.title ?? ""
+    }
+
+    var body: some View {
+        HStack(spacing: 7) {
+            if let prefix, !prefix.isEmpty {
+                Text(prefix)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(EchoTheme.textSecondary)
+            }
+
+            NeoMenuButton {
+                options.map { opt in
+                    .action(
+                        title: opt.title,
+                        isSelected: opt.value == selection
+                    ) {
+                        selection = opt.value
+                    }
+                }
+            } label: { isHovered in
+                HStack(spacing: 6) {
+                    if let icon {
+                        Image(systemName: icon)
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(accent)
+                    }
+                    Text(currentTitle)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(EchoTheme.textPrimary)
+                        .lineLimit(1)
+                    if fullWidth {
+                        Spacer(minLength: 4)
+                    }
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8.5, weight: .bold))
+                        .foregroundStyle(accent.opacity(isHovered ? 0.95 : 0.75))
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .frame(maxWidth: fullWidth ? .infinity : nil, alignment: .leading)
+                .background(
+                    ZStack {
+                        EchoTheme.surfaceElevated
+                        accent.opacity(isHovered ? 0.14 : 0.05)
+                    }
+                )
+                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                        .strokeBorder(accent.opacity(isHovered ? 0.90 : 0.55), lineWidth: 1)
+                )
+                .shadow(color: accent.opacity(isHovered ? 0.20 : 0.08), radius: 4, y: 1)
+            }
+        }
+    }
+}
+
+/// Compact square icon menu trigger with dark background and crisp neon border.
+struct NeoIconMenuButton: View {
+    let icon: String
+    var accent: Color = EchoTheme.neoMint
+    var size: CGFloat = 30
+    var iconSize: CGFloat = 12.5
+    let items: () -> [NeoMenuItem]
+
+    var body: some View {
+        NeoMenuButton(items: items) { isHovered in
+            Image(systemName: icon)
+                .font(.system(size: iconSize, weight: .semibold))
+                .frame(width: size, height: size)
+                .background(
+                    ZStack {
+                        EchoTheme.surfaceElevated
+                        accent.opacity(isHovered ? 0.16 : 0.06)
+                    }
+                )
+                .foregroundStyle(isHovered ? accent : EchoTheme.textPrimary)
+                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                        .strokeBorder(accent.opacity(isHovered ? 0.90 : 0.50), lineWidth: 1)
+                )
+        }
+    }
+}
+
+/// Dark + neon-green segmented control replacing native macOS gray `.pickerStyle(.segmented)`.
+struct NeoSegmentedControl<Selection: Hashable>: View {
+    @Binding var selection: Selection
+    let options: [(value: Selection, title: String)]
+    var accent: Color = EchoTheme.neoMint
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(Array(options.enumerated()), id: \.offset) { _, opt in
+                let isSelected = selection == opt.value
+                Button {
+                    selection = opt.value
+                } label: {
+                    Text(opt.title)
+                        .font(.system(size: 11.5, weight: isSelected ? .bold : .semibold))
+                        .foregroundStyle(isSelected ? accent : EchoTheme.textSecondary)
+                        .lineLimit(1)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            RoundedRectangle(cornerRadius: EchoTheme.radiusSmall, style: .continuous)
+                                .fill(isSelected ? accent.opacity(0.20) : Color.clear)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: EchoTheme.radiusSmall, style: .continuous)
+                                .strokeBorder(isSelected ? accent.opacity(0.68) : Color.clear, lineWidth: 1)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3)
+        .background(EchoTheme.surfaceElevated.opacity(0.85))
+        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                .strokeBorder(accent.opacity(0.42), lineWidth: 1)
+        )
+    }
+}
+
+/// Secondary dark-slate button with crisp green-neon rim (matches `Add Folder / NAS` / `Home` pill style).
+struct NeoSecondaryButton: View {
+    let title: String
+    var icon: String? = nil
+    var accent: Color = EchoTheme.neoMint
+    var disabled: Bool = false
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5.5) {
+                if let icon {
+                    Image(systemName: icon)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(disabled ? EchoTheme.textMuted : accent)
+                }
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(disabled ? EchoTheme.textMuted : EchoTheme.textPrimary)
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 6)
+            .background(
+                ZStack {
+                    EchoTheme.surfaceElevated
+                    if !disabled {
+                        accent.opacity(isHovered ? 0.14 : 0.05)
+                    }
+                }
+            )
+            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                    .strokeBorder(
+                        disabled ? EchoTheme.border : accent.opacity(isHovered ? 0.90 : 0.52),
+                        lineWidth: 1
+                    )
+            )
+            .shadow(color: disabled ? .clear : accent.opacity(isHovered ? 0.18 : 0.06), radius: 4, y: 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .onHover { isHovered = $0 }
+    }
+}
+
+/// Dark + neon-green text field chrome replacing native macOS `.textFieldStyle(.roundedBorder)`.
+extension View {
+    func neoTextField(accent: Color = EchoTheme.neoMint) -> some View {
+        self
+            .textFieldStyle(.plain)
+            .font(.system(size: 12))
+            .foregroundStyle(EchoTheme.textPrimary)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .background(EchoTheme.surfaceElevated.opacity(0.88))
+            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                    .strokeBorder(accent.opacity(0.45), lineWidth: 1)
+            )
     }
 }
 
@@ -447,10 +1118,14 @@ struct TrackRowView: View {
                     }
 
                     HStack(spacing: 6) {
-                        Text(track.artist)
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(EchoTheme.textSecondary)
-                            .lineLimit(1)
+                        ArtistLinksView(
+                            rawArtists: track.artist,
+                            font: .system(size: 11.5),
+                            color: EchoTheme.textSecondary,
+                            hoverColor: EchoTheme.neoMint
+                        ) { artistName in
+                            store.openArtist(name: artistName)
+                        }
 
                         if (store.destinationMode == .multi || destBadges.count > 1 || destBadges.contains(where: \.isSynced)) && !destBadges.isEmpty {
                             DestinationBadgeStrip(badges: destBadges)
@@ -461,40 +1136,54 @@ struct TrackRowView: View {
             .frame(minWidth: 180, maxWidth: .infinity, alignment: .leading)
 
             if showAlbumColumn {
-                Text(track.effectiveAlbum)
-                    .font(.system(size: 12))
-                    .foregroundStyle(EchoTheme.textSecondary)
-                    .lineLimit(1)
-                    .frame(width: 165, alignment: .leading)
+                HoverLinkText(
+                    text: track.effectiveAlbum,
+                    font: .system(size: 12),
+                    color: EchoTheme.textSecondary,
+                    hoverColor: EchoTheme.neoCyan,
+                    tip: "Go to album '\(track.effectiveAlbum)'"
+                ) {
+                    store.openAlbum(forTrack: track)
+                }
+                .frame(width: 150, alignment: .leading)
             }
 
-            FormatBadge(track: track, isUnsupported: isUnsupported)
-                .frame(width: 124, alignment: .trailing)
+            let trackStat = store.stats(for: track)
 
-            // Dedicated "+" button to add/toggle song in focused playlist
+            UserPlayCountBadge(stats: trackStat)
+                .frame(width: 44, alignment: .trailing)
+
+            OnlinePopularityMeter(stats: trackStat)
+                .frame(width: 50, alignment: .trailing)
+
+            FormatBadge(track: track, isUnsupported: isUnsupported)
+                .frame(width: 86, alignment: .center)
+
+            // Compact "P" badge to add/toggle song in focused playlist (grey when off, neon cyan when in playlist)
             if playlistContext == nil {
                 Button {
                     store.toggleTrackInFocusedPlaylist(track)
                 } label: {
-                    Image(systemName: isInFocusedPlaylist ? "checkmark" : "plus")
-                        .font(.system(size: 11, weight: .bold))
+                    Text("P")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
                         .frame(width: 24, height: 24)
                         .background(
                             RoundedRectangle(cornerRadius: EchoTheme.radiusSmall)
                                 .fill(isInFocusedPlaylist
                                       ? EchoTheme.neoCyan.opacity(0.24)
-                                      : (isHovered ? EchoTheme.neoMint.opacity(0.22) : EchoTheme.surfaceElevated.opacity(0.75)))
+                                      : (isHovered ? EchoTheme.surfaceElevated : EchoTheme.surfaceElevated.opacity(0.45)))
                         )
-                        .foregroundStyle(isInFocusedPlaylist ? EchoTheme.neoCyan : (isHovered ? EchoTheme.neoMint : EchoTheme.textSecondary))
+                        .foregroundStyle(isInFocusedPlaylist ? EchoTheme.neoCyan : (isHovered ? EchoTheme.textSecondary : EchoTheme.textMuted.opacity(0.55)))
                         .overlay(
                             RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(
-                                isInFocusedPlaylist ? EchoTheme.neoCyan.opacity(0.6) : EchoTheme.border,
-                                lineWidth: 1
+                                isInFocusedPlaylist ? EchoTheme.neoCyan.opacity(0.75) : EchoTheme.border,
+                                lineWidth: isInFocusedPlaylist ? 1.1 : 0.85
                             )
                         )
+                        .shadow(color: isInFocusedPlaylist ? EchoTheme.neoCyan.opacity(0.35) : .clear, radius: 4)
                 }
                 .buttonStyle(.plain)
-                .frame(width: 34)
+                .frame(width: 30)
                 .help(focusedPlaylistButtonTooltip)
             } else {
                 HStack(spacing: 4) {
@@ -503,26 +1192,34 @@ struct TrackRowView: View {
                         .foregroundStyle(isHovered ? EchoTheme.textSecondary : EchoTheme.textMuted.opacity(0.45))
                         .help("Drag this row up or down to reorder inside the playlist, or drag onto another playlist/device in the sidebar.")
                 }
-                .frame(width: 34)
+                .frame(width: 30)
             }
 
-            // Sync toggle for currently selected destination
+            // Compact "S" badge for sync inclusion (grey when off, neon mint when included in sync)
+            let isSyncedOnTarget = syncReason != nil
             Button {
                 store.toggleTrackSync(track)
             } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: syncReason != nil ? "checkmark.square.fill" : "square")
-                        .font(.system(size: 14))
-                        .foregroundStyle(syncReason != nil ? EchoTheme.neoMint : EchoTheme.textMuted)
-                    if let reason = syncReason, reason != "Track" {
-                        Text(reason)
-                            .font(.system(size: 8.5, weight: .bold, design: .monospaced))
-                            .foregroundStyle(EchoTheme.neoCyan)
-                    }
-                }
-                .frame(width: 72, alignment: .trailing)
+                Text("S")
+                    .font(.system(size: 11, weight: .black, design: .monospaced))
+                    .frame(width: 24, height: 24)
+                    .background(
+                        RoundedRectangle(cornerRadius: EchoTheme.radiusSmall)
+                            .fill(isSyncedOnTarget
+                                  ? EchoTheme.neoMint.opacity(0.24)
+                                  : (isHovered ? EchoTheme.surfaceElevated : EchoTheme.surfaceElevated.opacity(0.45)))
+                    )
+                    .foregroundStyle(isSyncedOnTarget ? EchoTheme.neoMint : (isHovered ? EchoTheme.textSecondary : EchoTheme.textMuted.opacity(0.55)))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(
+                            isSyncedOnTarget ? EchoTheme.neoMint.opacity(0.8) : EchoTheme.border,
+                            lineWidth: isSyncedOnTarget ? 1.1 : 0.85
+                        )
+                    )
+                    .shadow(color: isSyncedOnTarget ? EchoTheme.neoMint.opacity(0.38) : .clear, radius: 4)
             }
             .buttonStyle(.plain)
+            .frame(width: 30)
             .help(syncToggleTooltip)
 
             Text(Formatters.duration(track.duration))
@@ -535,6 +1232,24 @@ struct TrackRowView: View {
                 Button("Play Now") { onPlay() }
                 Button("Play Next") { store.player.enqueueNext(track) }
                 Button("Add to Queue") { store.player.addToQueue(track) }
+                Divider()
+                let parsedArtists = ArtistNameParser.artistNames(track.artist)
+                if parsedArtists.count > 1 {
+                    Menu("Go to Artist") {
+                        ForEach(parsedArtists, id: \.self) { name in
+                            Button(name) {
+                                store.openArtist(name: name)
+                            }
+                        }
+                    }
+                } else {
+                    Button("Go to Artist (\(parsedArtists.first ?? track.effectiveArtist))") {
+                        store.openArtist(name: parsedArtists.first ?? track.effectiveArtist)
+                    }
+                }
+                Button("Go to Album (\(track.effectiveAlbum))") {
+                    store.openAlbum(forTrack: track)
+                }
                 Divider()
                 if let focused = store.focusedPlaylist {
                     Button(isInFocusedPlaylist ? "Remove from '\(focused.name)'" : "Add to '\(focused.name)' (+)") {
@@ -578,6 +1293,14 @@ struct TrackRowView: View {
                     }
                 }
                 Divider()
+                Button("Fetch Online Popularity") {
+                    store.fetchPopularity(forTrack: track)
+                }
+                if store.userPlayCount(for: track) > 0 {
+                    Button("Reset Play Count (\(store.userPlayCount(for: track)))") {
+                        store.resetUserPlayCount(for: track)
+                    }
+                }
                 Button("Reveal in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: track.filePath)])
                 }

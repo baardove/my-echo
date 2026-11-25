@@ -5,6 +5,7 @@ struct PlayerBarView: View {
     @Environment(EchoStore.self) private var store
     @Environment(\.openWindow) private var openWindow
     @State private var showQueuePopover = false
+    @State private var showCrossfadePopover = false
     @State private var isScrubbing = false
     @State private var scrubValue: Double = 0
     @State private var isQueueDropTargeted = false
@@ -16,27 +17,66 @@ struct PlayerBarView: View {
         HStack(spacing: 18) {
             // Left: Now Playing Track Info (Draggable onto playlists!)
             HStack(spacing: 12) {
-                ArtworkView(hash: track?.artworkHash, artworkCache: store.artworkCache, cornerRadius: 8, iconSize: 18)
-                    .frame(width: 52, height: 52)
-                    .shadow(color: .black.opacity(0.4), radius: 6, y: 2)
+                Button {
+                    if let track { store.openAlbumLightbox(forTrack: track) }
+                } label: {
+                    ArtworkView(hash: track?.artworkHash, artworkCache: store.artworkCache, cornerRadius: 8, iconSize: 18)
+                        .frame(width: 52, height: 52)
+                        .shadow(color: .black.opacity(0.4), radius: 6, y: 2)
+                }
+                .buttonStyle(.plain)
+                .disabled(track == nil)
+                .help(track.map { "View full-size artwork & info for '\($0.effectiveAlbum)'" } ?? "")
 
                 if let track {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 7) {
-                            Text(track.title)
-                                .font(.system(size: 13.5, weight: .bold))
-                                .foregroundStyle(EchoTheme.textPrimary)
-                                .lineLimit(1)
-                            FormatBadge(track: track)
+                            HoverLinkText(
+                                text: track.title,
+                                font: .system(size: 13.5, weight: .bold),
+                                color: EchoTheme.textPrimary,
+                                hoverColor: EchoTheme.neoMint,
+                                tip: "Open album '\(track.effectiveAlbum)'"
+                            ) {
+                                store.openAlbum(forTrack: track)
+                            }
+                            FormatBadge(track: track, compact: true)
                         }
                         HStack(spacing: 6) {
-                            Button(track.artist) {
-                                store.navigate(to: .artistDetail(track.artistKey))
+                            let curStats = store.stats(for: track)
+                            ArtistLinksView(
+                                rawArtists: track.artist,
+                                font: .system(size: 11.5),
+                                color: EchoTheme.textSecondary,
+                                hoverColor: EchoTheme.neoMint
+                            ) { artistName in
+                                store.openArtist(name: artistName)
                             }
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(EchoTheme.textSecondary)
-                            .buttonStyle(.plain)
-                            .lineLimit(1)
+
+                            Text("·")
+                                .foregroundStyle(EchoTheme.textMuted)
+
+                            HoverLinkText(
+                                text: track.effectiveAlbum,
+                                font: .system(size: 11.5),
+                                color: EchoTheme.textMuted,
+                                hoverColor: EchoTheme.neoCyan,
+                                tip: "Go to album '\(track.effectiveAlbum)'"
+                            ) {
+                                store.openAlbum(forTrack: track)
+                            }
+
+                            if curStats.userPlayCount > 0 {
+                                Text("·")
+                                    .foregroundStyle(EchoTheme.textMuted)
+                                UserPlayCountBadge(stats: curStats)
+                            }
+
+                            if curStats.hasOnlinePopularity {
+                                Text("·")
+                                    .foregroundStyle(EchoTheme.textMuted)
+                                OnlinePopularityMeter(stats: curStats, compact: true)
+                            }
 
                             if let err = player.playbackError {
                                 Text("· \(err)")
@@ -122,15 +162,23 @@ struct PlayerBarView: View {
                         player.togglePlayPause()
                     } label: {
                         RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
-                            .fill(track != nil ? EchoTheme.accentGradient : LinearGradient(colors: [EchoTheme.surfaceElevated], startPoint: .top, endPoint: .bottom))
+                            .fill(EchoTheme.surfaceElevated)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                                    .fill(track != nil ? EchoTheme.neoMint.opacity(0.10) : Color.clear)
+                            )
                             .frame(width: 38, height: 34)
                             .overlay(
+                                RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                                    .strokeBorder(track != nil ? EchoTheme.neoMint.opacity(0.80) : EchoTheme.border, lineWidth: 1.15)
+                            )
+                            .overlay(
                                 Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                                    .font(.system(size: 14, weight: .black))
-                                    .foregroundStyle(track != nil ? .black : EchoTheme.textMuted)
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundStyle(track != nil ? EchoTheme.neoMint : EchoTheme.textMuted)
                                     .offset(x: player.isPlaying ? 0 : 1)
                             )
-                            .shadow(color: track != nil ? EchoTheme.neoMint.opacity(0.32) : .clear, radius: 6)
+                            .shadow(color: track != nil ? EchoTheme.neoMint.opacity(0.24) : .clear, radius: 6)
                     }
                     .buttonStyle(.plain)
                     .disabled(track == nil)
@@ -193,19 +241,62 @@ struct PlayerBarView: View {
 
             Spacer(minLength: 10)
 
-            // Right: Mini Player Launcher, Queue & Volume Controls
-            HStack(spacing: 12) {
+            // Right: Harmonized Crossfade, Mini Player, Queue & Volume Controls
+            HStack(spacing: 8) {
+                Button {
+                    showCrossfadePopover.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "waveform.path.ecg")
+                            .font(.system(size: 10.5, weight: .bold))
+                        Text(player.crossfadeEnabled ? "XF \(Int(player.crossfadeDuration.rounded()))s" : "XF")
+                            .font(.system(size: 9.5, weight: .black, design: .monospaced))
+                            .lineLimit(1)
+                    }
+                    .fixedSize()
+                    .padding(.horizontal, 8)
+                    .frame(height: 26)
+                    .background(
+                        player.isCrossfading
+                            ? EchoTheme.neoMint.opacity(0.28)
+                            : (player.crossfadeEnabled ? EchoTheme.neoCyan.opacity(0.18) : EchoTheme.surfaceElevated)
+                    )
+                    .foregroundStyle(
+                        player.isCrossfading
+                            ? EchoTheme.neoMint
+                            : (player.crossfadeEnabled ? EchoTheme.neoCyan : EchoTheme.textMuted)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(
+                            player.isCrossfading
+                                ? EchoTheme.neoMint
+                                : (player.crossfadeEnabled ? EchoTheme.neoCyan.opacity(0.55) : EchoTheme.border),
+                            lineWidth: 1
+                        )
+                    )
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showCrossfadePopover, arrowEdge: .top) {
+                    crossfadePopoverView
+                }
+                .help(player.crossfadeEnabled
+                      ? "Mac playback Crossfade is ON (\(Int(player.crossfadeDuration.rounded()))s equal-power blend). Click to adjust duration or turn off."
+                      : "Enable smooth equal-power Crossfade between tracks during Mac playback.")
+
                 Button {
                     openWindow(id: "mini-player")
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "rectangle.compress.vertical")
-                            .font(.system(size: 11, weight: .bold))
+                            .font(.system(size: 10.5, weight: .bold))
                         Text("MINI")
-                            .font(.system(size: 9, weight: .black, design: .monospaced))
+                            .font(.system(size: 9.5, weight: .black, design: .monospaced))
+                            .lineLimit(1)
                     }
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 4)
+                    .fixedSize()
+                    .padding(.horizontal, 8)
+                    .frame(height: 26)
                     .background(EchoTheme.surfaceElevated)
                     .foregroundStyle(EchoTheme.neoMint)
                     .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
@@ -219,13 +310,20 @@ struct PlayerBarView: View {
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "list.bullet")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(size: 10.5, weight: .bold))
                         if !player.queue.isEmpty {
                             Text("\(player.queue.count)")
-                                .font(.system(size: 10, design: .monospaced))
+                                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                .lineLimit(1)
                         }
                     }
+                    .fixedSize()
+                    .padding(.horizontal, 8)
+                    .frame(height: 26)
+                    .background(showQueuePopover ? EchoTheme.neoMint.opacity(0.18) : EchoTheme.surfaceElevated)
                     .foregroundStyle(showQueuePopover ? EchoTheme.neoMint : EchoTheme.textSecondary)
+                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                    .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(showQueuePopover ? EchoTheme.neoMint.opacity(0.55) : EchoTheme.border, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
                 .popover(isPresented: $showQueuePopover, arrowEdge: .top) {
@@ -239,7 +337,7 @@ struct PlayerBarView: View {
                     Image(systemName: volumeIcon(player: player))
                         .font(.system(size: 13))
                         .foregroundStyle(EchoTheme.textSecondary)
-                        .frame(width: 18)
+                        .frame(width: 20, height: 26)
                 }
                 .buttonStyle(.plain)
                 .help(player.isMuted ? "Unmute playback audio." : "Mute playback audio.")
@@ -255,9 +353,9 @@ struct PlayerBarView: View {
                     in: 0...1
                 )
                 .tint(EchoTheme.neoMint)
-                .frame(width: 96)
+                .frame(width: 88)
             }
-            .frame(width: 268, alignment: .trailing)
+            .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.horizontal, 18)
         .frame(height: 82)
@@ -315,10 +413,30 @@ struct PlayerBarView: View {
                                         .font(.system(size: 12, weight: isCurrent ? .bold : .medium))
                                         .foregroundStyle(isCurrent ? EchoTheme.neoMint : EchoTheme.textPrimary)
                                         .lineLimit(1)
-                                    Text(t.artist)
-                                        .font(.system(size: 10.5))
-                                        .foregroundStyle(EchoTheme.textSecondary)
-                                        .lineLimit(1)
+                                    HStack(spacing: 4) {
+                                        ArtistLinksView(
+                                            rawArtists: t.artist,
+                                            font: .system(size: 10.5),
+                                            color: EchoTheme.textSecondary,
+                                            hoverColor: EchoTheme.neoMint
+                                        ) { artistName in
+                                            showQueuePopover = false
+                                            store.openArtist(name: artistName)
+                                        }
+                                        Text("·")
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(EchoTheme.textMuted)
+                                        HoverLinkText(
+                                            text: t.effectiveAlbum,
+                                            font: .system(size: 10.5),
+                                            color: EchoTheme.textMuted,
+                                            hoverColor: EchoTheme.neoCyan,
+                                            tip: "Go to album '\(t.effectiveAlbum)'"
+                                        ) {
+                                            showQueuePopover = false
+                                            store.openAlbum(forTrack: t)
+                                        }
+                                    }
                                 }
                                 Spacer()
                                 Button {
@@ -346,6 +464,83 @@ struct PlayerBarView: View {
         }
         .padding(14)
         .frame(width: 310)
+        .background(EchoTheme.surface)
+    }
+
+    private var crossfadePopoverView: some View {
+        let player = store.player
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                HStack(spacing: 6) {
+                    Image(systemName: "waveform.path.ecg")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(player.crossfadeEnabled ? EchoTheme.neoCyan : EchoTheme.textMuted)
+                    Text("Mac Playback Crossfade")
+                        .font(.system(size: 13.5, weight: .bold))
+                        .foregroundStyle(EchoTheme.textPrimary)
+                }
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { player.crossfadeEnabled },
+                    set: { player.crossfadeEnabled = $0 }
+                ))
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .controlSize(.small)
+                .tint(EchoTheme.neoMint)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Fade Duration")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(EchoTheme.textSecondary)
+                    Spacer()
+                    Text(String(format: "%.0f sec", player.crossfadeDuration.rounded()))
+                        .font(.system(size: 12, weight: .black, design: .monospaced))
+                        .foregroundStyle(player.crossfadeEnabled ? EchoTheme.neoCyan : EchoTheme.textMuted)
+                }
+
+                Slider(
+                    value: Binding(
+                        get: { player.crossfadeDuration },
+                        set: { player.crossfadeDuration = $0.rounded() }
+                    ),
+                    in: 1...12,
+                    step: 1
+                )
+                .tint(EchoTheme.neoCyan)
+                .disabled(!player.crossfadeEnabled)
+
+                HStack(spacing: 6) {
+                    ForEach([2, 4, 6, 8, 12], id: \.self) { secs in
+                        let selected = Int(player.crossfadeDuration.rounded()) == secs
+                        Button("\(secs)s") {
+                            player.crossfadeEnabled = true
+                            player.crossfadeDuration = Double(secs)
+                        }
+                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                        .background(selected && player.crossfadeEnabled ? EchoTheme.neoCyan.opacity(0.22) : EchoTheme.surfaceElevated)
+                        .foregroundStyle(selected && player.crossfadeEnabled ? EchoTheme.neoCyan : EchoTheme.textSecondary)
+                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: EchoTheme.radiusSmall)
+                                .strokeBorder(selected && player.crossfadeEnabled ? EchoTheme.neoCyan.opacity(0.6) : EchoTheme.border, lineWidth: 1)
+                        )
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            Text("Equal-power dual-deck blend on Mac playback (also applies a quick 1.5s fade on manual skips). Synced FiiO/SD audio files stay untouched.")
+                .font(.system(size: 10.5))
+                .foregroundStyle(EchoTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .frame(width: 280)
         .background(EchoTheme.surface)
     }
 }

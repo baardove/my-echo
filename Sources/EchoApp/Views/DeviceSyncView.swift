@@ -20,12 +20,16 @@ struct DeviceSyncView: View {
         if let idx = store.devices.firstIndex(where: { $0.id == deviceID }) {
             let device = store.devices[idx]
             let vol = store.volumeInfo(for: device)
-            let plan = (store.activeDevice?.id == device.id ? store.activeSyncPlan : nil)
-                ?? SyncPlanner.buildPlan(profile: device, allTracks: store.tracks, playlists: store.playlists, podcasts: store.podcasts)
+            let plan = store.cachedSyncPlan(for: device)
+                ?? SyncPlan.empty(for: device, projectedTracks: store.assignedTrackCount(for: device))
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     deviceHeader(device: device, vol: vol, plan: plan)
+
+                    if device.isVirtualWireless {
+                        wirelessIPhoneSyncHubCard(device: device, plan: plan)
+                    }
 
                     if store.isSyncing, let prog = store.syncProgress {
                         liveSyncProgressCard(prog)
@@ -45,6 +49,9 @@ struct DeviceSyncView: View {
                     }
                 }
                 .padding(26)
+            }
+            .task(id: device.id) {
+                store.ensureSyncPlanLoaded(for: device.id)
             }
         } else {
             ContentUnavailableView("Device Not Found", systemImage: "sdcard")
@@ -79,7 +86,7 @@ struct DeviceSyncView: View {
                             RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous)
                                 .strokeBorder(EchoTheme.color(for: device.accentColor).opacity(0.55), lineWidth: 1.5)
                         )
-                    Image(systemName: device.preset == .fiioDisc ? "opticaldisc.fill" : (device.preset == .fiioEchoMini || device.preset == .fiioNano ? "hifispeaker.fill" : "sdcard.fill"))
+                    Image(systemName: device.preset == .iphoneWireless ? "iphone.radiowaves.left.and.right" : (device.preset == .fiioDisc ? "opticaldisc.fill" : (device.preset == .fiioEchoMini || device.preset == .fiioNano ? "hifispeaker.fill" : "sdcard.fill")))
                         .font(.system(size: 30))
                         .foregroundStyle(EchoTheme.accentGradient)
                 }
@@ -87,9 +94,11 @@ struct DeviceSyncView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 8) {
                         Circle()
-                            .fill(device.isConnected ? EchoTheme.neoMint : EchoTheme.dangerCoral)
+                            .fill(device.isVirtualWireless ? (store.isWirelessServerRunning ? EchoTheme.neoMint : EchoTheme.warningAmber) : (device.isConnected ? EchoTheme.neoMint : EchoTheme.dangerCoral))
                             .frame(width: 8, height: 8)
-                        Text(device.isConnected ? "CONNECTED" : "OFFLINE — PLUG IN TO SYNC")
+                        Text(device.isVirtualWireless
+                             ? (store.isWirelessServerRunning ? "WI-FI AUTO-SYNC LIVE · BONJOUR" : "WI-FI SERVER STARTING")
+                             : (device.isConnected ? "CONNECTED" : "OFFLINE — PLUG IN TO SYNC"))
                             .font(.system(size: 10, weight: .black, design: .monospaced))
                             .tracking(1.2)
                             .foregroundStyle(device.isConnected ? EchoTheme.neoMint : EchoTheme.dangerCoral)
@@ -97,6 +106,31 @@ struct DeviceSyncView: View {
                             Text("· \(vol.fileSystemType)")
                                 .font(.system(size: 10, design: .monospaced))
                                 .foregroundStyle(EchoTheme.textMuted)
+                            if vol.connectionKind != .unknown {
+                                let connColor: Color = vol.connectionKind == .inPlayer ? EchoTheme.neoMint : (vol.connectionKind.isCardReader ? EchoTheme.warningAmber : EchoTheme.neoCyan)
+                                HStack(spacing: 4) {
+                                    Image(systemName: vol.connectionKind.iconName)
+                                        .font(.system(size: 9, weight: .bold))
+                                    Text(vol.connectionKind.shortBadge)
+                                        .font(.system(size: 9, weight: .black, design: .monospaced))
+                                }
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(connColor.opacity(0.16))
+                                .foregroundStyle(connColor)
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(connColor.opacity(0.45), lineWidth: 1))
+                                .help(vol.connectionSummary)
+                            }
+                        } else if !device.isVirtualWireless, let lastKind = device.lastConnectionKind, lastKind != .unknown {
+                            Text("· Last via \(lastKind.shortBadge)")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(EchoTheme.textMuted)
+                                .help(device.lastConnectionDetail ?? lastKind.displayName)
+                        } else if device.isVirtualWireless, store.wirelessServerPort > 0 {
+                            Text("· PORT \(store.wirelessServerPort)")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(EchoTheme.neoCyan)
                         }
                     }
 
@@ -154,7 +188,9 @@ struct DeviceSyncView: View {
                         }
                     }
 
-                    Text(device.mountPath)
+                    Text(device.isVirtualWireless
+                         ? "http://\(store.wirelessServerLANIP ?? "localhost"):\(store.wirelessServerPort > 0 ? Int(store.wirelessServerPort) : Int(WirelessSyncServer.defaultPort)) · Bonjour \(WirelessSyncServer.bonjourServiceType)"
+                         : device.mountPath)
                         .font(.system(size: 11.5, design: .monospaced))
                         .foregroundStyle(EchoTheme.textSecondary)
                 }
@@ -198,23 +234,13 @@ struct DeviceSyncView: View {
 
                         if device.isConnected && (vol?.isRemovable == true || device.mountPath.hasPrefix("/Volumes/")) {
                             HStack(spacing: 4) {
-                                Button {
+                                NeoSecondaryButton(
+                                    title: "Clean ._* & Eject",
+                                    icon: "eject.fill",
+                                    disabled: store.isSyncing
+                                ) {
                                     store.cleanAndEjectDevice(device, force: false)
-                                } label: {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "eject.fill")
-                                        Text("Clean ._* & Eject")
-                                            .font(.system(size: 12, weight: .semibold))
-                                    }
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 7.5)
-                                    .background(EchoTheme.surfaceElevated)
-                                    .foregroundStyle(EchoTheme.textPrimary)
-                                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
-                                    .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.borderStrong, lineWidth: 1))
                                 }
-                                .buttonStyle(.plain)
-                                .disabled(store.isSyncing)
                                 .help("Flush writes, purge all hidden macOS ._* and .DS_Store files from '\(device.name)', and safely unmount/eject via diskutil.")
 
                                 Button {
@@ -250,14 +276,18 @@ struct DeviceSyncView: View {
                             .help("Stop the currently running sync operation after the active file finishes.")
                         } else {
                             NeoPrimaryButton(
-                                title: plan.hasPendingChanges ? "Sync \(plan.totalPendingCopies) Item\(plan.totalPendingCopies == 1 ? "" : "s")" : "Sync Now",
-                                icon: "arrow.triangle.2.circlepath",
+                                title: device.isVirtualWireless
+                                    ? "Publish to iPhone"
+                                    : (plan.hasPendingChanges ? "Sync \(plan.totalPendingCopies) Item\(plan.totalPendingCopies == 1 ? "" : "s")" : "Sync Now"),
+                                icon: device.isVirtualWireless ? "wifi" : "arrow.triangle.2.circlepath",
                                 disabled: !device.isConnected
                             ) {
                                 store.selectActiveDevice(device.id)
                                 store.startSync(for: device)
                             }
-                            .help("Execute the sync plan for '\(device.name)': copy music & podcasts, optimize cover art to Baseline JPEG, export M3U playlists, and clean ._* files.")
+                            .help(device.isVirtualWireless
+                                  ? "Refresh the Wi-Fi manifest immediately so My Echo iOS auto-syncs all pending changes over Wi-Fi."
+                                  : "Execute the sync plan for '\(device.name)': copy music & podcasts, optimize cover art to Baseline JPEG, export M3U playlists, and clean ._* files.")
                         }
                     }
 
@@ -270,6 +300,136 @@ struct DeviceSyncView: View {
             }
             .padding(22)
         }
+    }
+
+    // MARK: - Virtual iPhone Wi-Fi Auto-Sync Hub
+
+    private func wirelessIPhoneSyncHubCard(device: DeviceProfile, plan: SyncPlan) -> some View {
+        let lanIP = store.wirelessServerLANIP ?? "127.0.0.1"
+        let port = store.wirelessServerPort > 0 ? store.wirelessServerPort : WirelessSyncServer.defaultPort
+        let serverURL = "http://\(lanIP):\(port)"
+        let pin = device.wirelessSyncToken ?? "000000"
+        let manifestVer = store.wirelessManifestVersions[device.id] ?? "—"
+
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                Image(systemName: "wifi")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(store.isWirelessServerRunning ? EchoTheme.neoMint : EchoTheme.warningAmber)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("iPhone Wi-Fi Auto-Sync Server (Bonjour + HTTP)")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(EchoTheme.textPrimary)
+                    Text("Open the standalone My Echo iOS app on the same Wi-Fi network — it auto-discovers this Mac and syncs all tracks, playlists, and podcasts marked for '\(device.name)'. On cellular/away from home, stream your full library from Navidrome over Tailscale.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(EchoTheme.textSecondary)
+                }
+                Spacer()
+                Button("Open iOS Project") {
+                    let fallback = URL(fileURLWithPath: "/Users/bard/Code/Echo/iOS")
+                    NSWorkspace.shared.open(fallback)
+                }
+                .font(.system(size: 11, weight: .bold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(EchoTheme.surfaceElevated)
+                .foregroundStyle(EchoTheme.neoCyan)
+                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                .buttonStyle(.plain)
+                .help("Open the standalone My Echo iOS Xcode project folder in Finder.")
+            }
+
+            HStack(spacing: 14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("LOCAL WI-FI SYNC URL")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(EchoTheme.textMuted)
+                    HStack(spacing: 8) {
+                        Text(serverURL)
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundStyle(EchoTheme.neoCyan)
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(serverURL, forType: .string)
+                            store.showToast("Copied Wi-Fi Sync URL: \(serverURL)")
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .font(.system(size: 11))
+                                .foregroundStyle(EchoTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Copy server URL to clipboard.")
+                    }
+                }
+                .padding(10)
+                .background(Color.black.opacity(0.28))
+                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("6-DIGIT PAIRING PIN")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(EchoTheme.textMuted)
+                    HStack(spacing: 8) {
+                        Text(pin)
+                            .font(.system(size: 15, weight: .black, design: .monospaced))
+                            .tracking(2.0)
+                            .foregroundStyle(EchoTheme.neoMint)
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(pin, forType: .string)
+                            store.showToast("Copied Pairing PIN")
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .font(.system(size: 11))
+                                .foregroundStyle(EchoTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Copy Pairing PIN.")
+                        Button {
+                            store.regenerateWirelessPIN(for: device)
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 11))
+                                .foregroundStyle(EchoTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Generate a new 6-digit pairing PIN.")
+                    }
+                }
+                .padding(10)
+                .background(Color.black.opacity(0.28))
+                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("LIVE MANIFEST · \(manifestVer.uppercased())")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(EchoTheme.textMuted)
+                    Text("\(plan.projectedTotalTracks) tracks · \(plan.playlistsToWrite.count) playlists · \(device.syncedTrackIDs.count) confirmed on iPhone")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(EchoTheme.textPrimary)
+                    if let last = device.lastSyncedAt {
+                        Text("Last iPhone sync: \(last.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(EchoTheme.neoMint)
+                    } else {
+                        Text("Waiting for first iPhone connection on Wi-Fi...")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(EchoTheme.textMuted)
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.black.opacity(0.28))
+                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+            }
+        }
+        .padding(16)
+        .background(EchoTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous)
+                .strokeBorder(EchoTheme.neoCyan.opacity(0.45), lineWidth: 1)
+        )
     }
 
     // MARK: - Telemetry Cards (Storage + Track Cap + Selection Summary)
@@ -430,19 +590,19 @@ struct DeviceSyncView: View {
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(EchoTheme.textMuted)
 
-                Picker("Preset", selection: Binding(
-                    get: { device.preset },
-                    set: { newPreset in
-                        var updated = device
-                        updated.applyPresetDefaults(newPreset)
-                        store.updateDevice(updated)
-                    }
-                )) {
-                    ForEach(DevicePresetKind.allCases, id: \.self) { kind in
-                        Text(kind.displayName).tag(kind)
-                    }
-                }
-                .labelsHidden()
+                NeoPickerDropdown(
+                    icon: "cpu",
+                    fullWidth: true,
+                    selection: Binding(
+                        get: { device.preset },
+                        set: { newPreset in
+                            var updated = device
+                            updated.applyPresetDefaults(newPreset)
+                            store.updateDevice(updated)
+                        }
+                    ),
+                    options: DevicePresetKind.allCases.map { ($0, $0.displayName) }
+                )
 
                 Text(device.preset.subtitle)
                     .font(.system(size: 10.5))
@@ -455,20 +615,17 @@ struct DeviceSyncView: View {
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(EchoTheme.textMuted)
 
-                Picker("Sync Mode", selection: Binding(
-                    get: { device.syncMode },
-                    set: { mode in
-                        var updated = device
-                        updated.syncMode = mode
-                        store.updateDevice(updated)
-                    }
-                )) {
-                    ForEach(SyncMode.allCases, id: \.self) { m in
-                        Text(m.displayName).tag(m)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                NeoSegmentedControl(
+                    selection: Binding(
+                        get: { device.syncMode },
+                        set: { mode in
+                            var updated = device
+                            updated.syncMode = mode
+                            store.updateDevice(updated)
+                        }
+                    ),
+                    options: SyncMode.allCases.map { ($0, $0.displayName) }
+                )
 
                 Text(device.syncMode.detail)
                     .font(.system(size: 10.5))
@@ -496,7 +653,7 @@ struct DeviceSyncView: View {
                             store.updateDevice(updated)
                         }
                     ))
-                    .textFieldStyle(.roundedBorder)
+                    .neoTextField()
                     .frame(width: 150)
                 }
 
@@ -513,7 +670,7 @@ struct DeviceSyncView: View {
                             store.updateDevice(updated)
                         }
                     ))
-                    .textFieldStyle(.roundedBorder)
+                    .neoTextField()
                     .frame(width: 150)
                 }
 
@@ -522,15 +679,19 @@ struct DeviceSyncView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(EchoTheme.textSecondary)
                     Spacer()
-                    Picker("", selection: Binding(
-                        get: { device.podcastEpisodesPerShowLimit },
-                        set: { v in var d = device; d.podcastEpisodesPerShowLimit = v; store.updateDevice(d) }
-                    )) {
-                        Text("Latest 3").tag(3)
-                        Text("Latest 5").tag(5)
-                        Text("Latest 10").tag(10)
-                        Text("Latest 20").tag(20)
-                    }
+                    NeoPickerDropdown(
+                        fullWidth: true,
+                        selection: Binding(
+                            get: { device.podcastEpisodesPerShowLimit },
+                            set: { v in var d = device; d.podcastEpisodesPerShowLimit = v; store.updateDevice(d) }
+                        ),
+                        options: [
+                            (3, "Latest 3"),
+                            (5, "Latest 5"),
+                            (10, "Latest 10"),
+                            (20, "Latest 20")
+                        ]
+                    )
                     .frame(width: 150)
                 }
 
@@ -547,7 +708,7 @@ struct DeviceSyncView: View {
                             store.updateDevice(updated)
                         }
                     ))
-                    .textFieldStyle(.roundedBorder)
+                    .neoTextField()
                     .frame(width: 150)
                 }
 
@@ -555,19 +716,18 @@ struct DeviceSyncView: View {
                     Text("M3U Path Format")
                         .font(.system(size: 11.5))
                         .foregroundStyle(EchoTheme.textSecondary)
-                    Picker("M3U Format", selection: Binding(
-                        get: { device.playlistPathStyle },
-                        set: { style in
-                            var updated = device
-                            updated.playlistPathStyle = style
-                            store.updateDevice(updated)
-                        }
-                    )) {
-                        ForEach(PlaylistPathStyle.allCases, id: \.self) { s in
-                            Text(s.displayName).tag(s)
-                        }
-                    }
-                    .labelsHidden()
+                    NeoPickerDropdown(
+                        fullWidth: true,
+                        selection: Binding(
+                            get: { device.playlistPathStyle },
+                            set: { style in
+                                var updated = device
+                                updated.playlistPathStyle = style
+                                store.updateDevice(updated)
+                            }
+                        ),
+                        options: PlaylistPathStyle.allCases.map { ($0, $0.displayName) }
+                    )
                 }
             }
 
@@ -591,16 +751,20 @@ struct DeviceSyncView: View {
                             .font(.system(size: 11.5))
                             .foregroundStyle(EchoTheme.textSecondary)
                         Spacer()
-                        Picker("", selection: Binding(
-                            get: { device.maxArtworkDimension },
-                            set: { v in var d = device; d.maxArtworkDimension = v; store.updateDevice(d) }
-                        )) {
-                            Text("500 × 500 (Nano / Ultra-safe)").tag(500)
-                            Text("600 × 600 (Echo)").tag(600)
-                            Text("800 × 800 (Standard)").tag(800)
-                            Text("1000 × 1000 (Disc / Android)").tag(1000)
-                        }
-                        .frame(width: 185)
+                        NeoPickerDropdown(
+                            fullWidth: true,
+                            selection: Binding(
+                                get: { device.maxArtworkDimension },
+                                set: { v in var d = device; d.maxArtworkDimension = v; store.updateDevice(d) }
+                            ),
+                            options: [
+                                (500, "500 × 500 (Nano / Ultra-safe)"),
+                                (600, "600 × 600 (Echo)"),
+                                (800, "800 × 800 (Standard)"),
+                                (1000, "1000 × 1000 (Disc / Android)")
+                            ]
+                        )
+                        .frame(width: 195)
                     }
                 }
 
@@ -645,14 +809,16 @@ struct DeviceSyncView: View {
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(EchoTheme.textPrimary)
                 Spacer()
-                Picker("", selection: $selectedDiffTab) {
-                    Text("Copy (\(plan.totalPendingCopies))").tag(DiffTab.toCopy)
-                    Text("Playlists (\(plan.playlistsToWrite.count))").tag(DiffTab.playlists)
-                    Text("Remove (\(plan.totalPendingRemovals))").tag(DiffTab.toRemove)
-                    Text("Warnings (\(plan.unsupportedSkipped.count + plan.offlineSkipped.count))").tag(DiffTab.warnings)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 360)
+                NeoSegmentedControl(
+                    selection: $selectedDiffTab,
+                    options: [
+                        (.toCopy, "Copy (\(plan.totalPendingCopies))"),
+                        (.playlists, "Playlists (\(plan.playlistsToWrite.count))"),
+                        (.toRemove, "Remove (\(plan.totalPendingRemovals))"),
+                        (.warnings, "Warnings (\(plan.unsupportedSkipped.count + plan.offlineSkipped.count))")
+                    ]
+                )
+                .frame(width: 390)
             }
 
             Divider().overlay(EchoTheme.border)
@@ -707,9 +873,28 @@ struct DeviceSyncView: View {
                                         .font(.system(size: 11.5, design: .monospaced))
                                         .foregroundStyle(EchoTheme.textPrimary)
                                         .lineLimit(1)
-                                    Text("\(item.track.artist) · \(item.track.effectiveAlbum)")
-                                        .font(.system(size: 10.5))
-                                        .foregroundStyle(EchoTheme.textMuted)
+                                    HStack(spacing: 4) {
+                                        ArtistLinksView(
+                                            rawArtists: item.track.artist,
+                                            font: .system(size: 10.5),
+                                            color: EchoTheme.textMuted,
+                                            hoverColor: EchoTheme.neoMint
+                                        ) { artistName in
+                                            store.openArtist(name: artistName)
+                                        }
+                                        Text("·")
+                                            .font(.system(size: 10.5))
+                                            .foregroundStyle(EchoTheme.textMuted)
+                                        HoverLinkText(
+                                            text: item.track.effectiveAlbum,
+                                            font: .system(size: 10.5),
+                                            color: EchoTheme.textMuted,
+                                            hoverColor: EchoTheme.neoCyan,
+                                            tip: "Go to album '\(item.track.effectiveAlbum)'"
+                                        ) {
+                                            store.openAlbum(forTrack: item.track)
+                                        }
+                                    }
                                 }
                                 Spacer()
                                 FormatBadge(track: item.track)
@@ -741,15 +926,33 @@ struct DeviceSyncView: View {
                         subtitle: "Create a playlist in the sidebar or drag & drop songs onto '+ New Playlist' to build one."
                     )
                 } else {
-                    VStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 10) {
                         ForEach(store.playlists) { playlist in
                             let isIncluded = device.selectedPlaylistIDs.contains(playlist.id)
                             let planned = plan.playlistsToWrite.first(where: { $0.playlist.id == playlist.id })
                             let relPath = PathFormatter.relativePlaylistPath(for: playlist, profile: device)
 
                             VStack(alignment: .leading, spacing: 6) {
-                                HStack(spacing: 10) {
-                                    Toggle(isOn: Binding(
+                                HStack(alignment: .center, spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        HStack(spacing: 6) {
+                                            Text(playlist.name)
+                                                .font(.system(size: 13, weight: .bold))
+                                                .foregroundStyle(isIncluded ? EchoTheme.textPrimary : EchoTheme.textSecondary)
+                                                .lineLimit(1)
+                                            Text("\(playlist.trackIDs.count) tracks")
+                                                .font(.system(size: 10.5, design: .monospaced))
+                                                .foregroundStyle(isIncluded ? EchoTheme.neoMint : EchoTheme.textMuted)
+                                        }
+                                        Text(isIncluded ? "Will export \(relPath)" : "Excluded from sync")
+                                            .font(.system(size: 10.5, design: .monospaced))
+                                            .foregroundStyle(isIncluded ? EchoTheme.neoCyan : EchoTheme.textMuted)
+                                            .lineLimit(1)
+                                    }
+
+                                    Spacer(minLength: 12)
+
+                                    Toggle("", isOn: Binding(
                                         get: { isIncluded },
                                         set: { enabled in
                                             var updated = device
@@ -760,21 +963,8 @@ struct DeviceSyncView: View {
                                             }
                                             store.updateDevice(updated)
                                         }
-                                    )) {
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            HStack(spacing: 6) {
-                                                Text(playlist.name)
-                                                    .font(.system(size: 13, weight: .bold))
-                                                    .foregroundStyle(isIncluded ? EchoTheme.textPrimary : EchoTheme.textSecondary)
-                                                Text("\(playlist.trackIDs.count) tracks")
-                                                    .font(.system(size: 10.5, design: .monospaced))
-                                                    .foregroundStyle(isIncluded ? EchoTheme.neoMint : EchoTheme.textMuted)
-                                            }
-                                            Text(isIncluded ? "Will export \(relPath)" : "Excluded from sync")
-                                                .font(.system(size: 10.5, design: .monospaced))
-                                                .foregroundStyle(isIncluded ? EchoTheme.neoCyan : EchoTheme.textMuted)
-                                        }
-                                    }
+                                    ))
+                                    .labelsHidden()
                                     .toggleStyle(.switch)
                                     .controlSize(.small)
                                     .tint(EchoTheme.neoMint)
@@ -790,17 +980,20 @@ struct DeviceSyncView: View {
                                         .font(.system(size: 10.5, design: .monospaced))
                                         .foregroundStyle(EchoTheme.textMuted)
                                         .lineLimit(1)
+                                        .truncationMode(.middle)
                                 }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(11)
                             .background(isIncluded ? EchoTheme.neoMint.opacity(0.08) : EchoTheme.surfaceElevated.opacity(0.35))
-                            .clipShape(RoundedRectangle(cornerRadius: 9))
+                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard))
                             .overlay(
-                                RoundedRectangle(cornerRadius: 9)
+                                RoundedRectangle(cornerRadius: EchoTheme.radiusCard)
                                     .strokeBorder(isIncluded ? EchoTheme.neoMint.opacity(0.35) : EchoTheme.border, lineWidth: 1)
                             )
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
             case .toRemove:

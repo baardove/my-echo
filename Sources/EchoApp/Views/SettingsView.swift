@@ -6,6 +6,10 @@ struct SettingsView: View {
     @Environment(EchoStore.self) private var store
     @State private var renamingDevice: DeviceProfile?
     @State private var renameDraft: String = ""
+    @State private var lastFMKeyDraft: String = ""
+    @State private var showResetPlaysConfirm = false
+    @State private var lidarrURLDraft: String = ""
+    @State private var lidarrKeyDraft: String = ""
 
     var body: some View {
         ScrollView {
@@ -79,33 +83,26 @@ struct SettingsView: View {
                                 .font(.system(size: 12.5, weight: .semibold))
                                 .foregroundStyle(EchoTheme.textSecondary)
 
-                            Picker("", selection: Binding<UUID?>(
-                                get: { store.activeDeviceID },
-                                set: { store.selectActiveDevice($0) }
-                            )) {
-                                if store.destinationMode == .multi {
-                                    Text("None — Prompt Me to Choose").tag(UUID?.none)
-                                }
-                                ForEach(store.devices) { dev in
-                                    Text("\(dev.name) (\(dev.preset.displayName))").tag(UUID?.some(dev.id))
-                                }
-                            }
+                            NeoPickerDropdown(
+                                icon: "sdcard.fill",
+                                fullWidth: true,
+                                selection: Binding<UUID?>(
+                                    get: { store.activeDeviceID },
+                                    set: { store.selectActiveDevice($0) }
+                                ),
+                                options: (store.destinationMode == .multi
+                                          ? [(UUID?.none, "None — Prompt Me to Choose")]
+                                          : []) + store.devices.map { (UUID?.some($0.id), "\($0.name) (\($0.preset.displayName))") }
+                            )
                             .frame(width: 310)
                             .help("Choose which audio player or SD card receives track, album, playlist, and podcast sync selections.")
 
                             Spacer()
 
                             if store.destinationMode == .multi && store.activeDeviceID != nil {
-                                Button("Clear Target") {
+                                NeoSecondaryButton(title: "Clear Target") {
                                     store.selectActiveDevice(nil)
                                 }
-                                .font(.system(size: 11.5, weight: .semibold))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
-                                .background(EchoTheme.surfaceElevated)
-                                .foregroundStyle(EchoTheme.textSecondary)
-                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
-                                .buttonStyle(.plain)
                                 .help("Unselect the active sync target so you are prompted before syncing in Multi-Destination mode.")
                             }
                         }
@@ -178,6 +175,21 @@ struct SettingsView: View {
                             .foregroundStyle(EchoTheme.neoCyan)
                         Spacer()
                         Button {
+                            store.addVirtualIPhoneDestination()
+                        } label: {
+                            Label("Add Virtual iPhone", systemImage: "iphone.radiowaves.left.and.right")
+                                .font(.system(size: 11.5, weight: .bold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(EchoTheme.neoCyan.opacity(0.16))
+                                .foregroundStyle(EchoTheme.neoCyan)
+                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(EchoTheme.neoCyan.opacity(0.45), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Create a virtual iPhone destination with automatic Wi-Fi Bonjour sync for the standalone My Echo iOS app.")
+
+                        Button {
                             store.addCustomDeviceFolderViaPanel()
                         } label: {
                             Label("Add Destination", systemImage: "plus")
@@ -204,26 +216,25 @@ struct SettingsView: View {
                         VStack(spacing: 10) {
                             ForEach(store.devices) { dev in
                                 let isTarget = store.activeDevice?.id == dev.id
-                                let assignedTracks = SyncPlanner.resolveSelectedTrackIDs(profile: dev, allTracks: store.tracks, playlists: store.playlists).count
+                                let assignedTracks = store.assignedTrackCount(for: dev)
                                 let assignedEps = SyncPlanner.resolveSelectedEpisodeIDs(profile: dev, podcasts: store.podcasts).count
 
                                 HStack(spacing: 14) {
                                     // Accent color tag picker
-                                    Menu {
-                                        ForEach(DeviceAccentColor.allCases, id: \.self) { accent in
-                                            Button(accent.displayName) {
+                                    NeoMenuButton {
+                                        DeviceAccentColor.allCases.map { accent in
+                                            .action(title: accent.displayName, isSelected: dev.accentColor == accent) {
                                                 var updated = dev
                                                 updated.accentColor = accent
                                                 store.updateDevice(updated)
                                             }
                                         }
-                                    } label: {
+                                    } label: { isHovered in
                                         RoundedRectangle(cornerRadius: 4)
                                             .fill(EchoTheme.color(for: dev.accentColor))
                                             .frame(width: 22, height: 22)
-                                            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(.white.opacity(0.4), lineWidth: 1))
+                                            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(isHovered ? EchoTheme.neoMint : .white.opacity(0.45), lineWidth: isHovered ? 1.5 : 1))
                                     }
-                                    .menuStyle(.borderlessButton)
                                     .fixedSize()
                                     .help("Change the badge color tag used to identify '\(dev.name)' on tracks and podcasts in Multi-Destination mode.")
 
@@ -311,7 +322,386 @@ struct SettingsView: View {
                     }
                 }
 
-                // 4. Data & Storage Paths
+                // 4. Mac Playback & Crossfade
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("MAC PLAYBACK & CROSSFADE")
+                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                        .tracking(1.2)
+                        .foregroundStyle(EchoTheme.neoCyan)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 16) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Enable Equal-Power Crossfade")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(EchoTheme.textPrimary)
+                                Text("Smoothly blends the end of each track into the next during Mac playback using constant-energy equal-power curves. Does not alter audio files synced to FiiO players or SD cards.")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(EchoTheme.textSecondary)
+                            }
+                            Spacer()
+                            Toggle("", isOn: Binding(
+                                get: { store.player.crossfadeEnabled },
+                                set: { store.player.crossfadeEnabled = $0 }
+                            ))
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                            .tint(EchoTheme.neoMint)
+                        }
+
+                        if store.player.crossfadeEnabled {
+                            Divider().overlay(EchoTheme.border)
+                            HStack(spacing: 14) {
+                                Text("Crossfade Duration")
+                                    .font(.system(size: 12.5, weight: .semibold))
+                                    .foregroundStyle(EchoTheme.textSecondary)
+
+                                Slider(
+                                    value: Binding(
+                                        get: { store.player.crossfadeDuration },
+                                        set: { store.player.crossfadeDuration = $0.rounded() }
+                                    ),
+                                    in: 1...12,
+                                    step: 1
+                                )
+                                .frame(maxWidth: 260)
+                                .tint(EchoTheme.neoCyan)
+
+                                Text("\(Int(store.player.crossfadeDuration.rounded())) sec")
+                                    .font(.system(size: 12, weight: .black, design: .monospaced))
+                                    .foregroundStyle(EchoTheme.neoCyan)
+                                    .frame(width: 52, alignment: .leading)
+
+                                Spacer()
+
+                                HStack(spacing: 6) {
+                                    ForEach([2, 5, 8, 12], id: \.self) { secs in
+                                        let active = Int(store.player.crossfadeDuration.rounded()) == secs
+                                        Button("\(secs)s") {
+                                            store.player.crossfadeDuration = Double(secs)
+                                        }
+                                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                        .padding(.horizontal, 9)
+                                        .padding(.vertical, 4.5)
+                                        .background(active ? EchoTheme.neoCyan.opacity(0.22) : EchoTheme.surfaceElevated)
+                                        .foregroundStyle(active ? EchoTheme.neoCyan : EchoTheme.textSecondary)
+                                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(14)
+                    .background(EchoTheme.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard))
+                    .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusCard).strokeBorder(EchoTheme.border, lineWidth: 1))
+                }
+
+                // 5. Play Counters & Online Popularity
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("PLAY COUNTERS & ONLINE POPULARITY")
+                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                        .tracking(1.2)
+                        .foregroundStyle(EchoTheme.neoCyan)
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack(spacing: 16) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Automatic Online Popularity Lookup")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(EchoTheme.textPrimary)
+                                Text("Automatically fetches global track popularity scores (0–100) and artist fan counts from Deezer when you open albums or artists. Zero API key required; cached locally in SQLite.")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(EchoTheme.textSecondary)
+                            }
+                            Spacer()
+                            Toggle("", isOn: Binding(
+                                get: { store.onlinePopularityEnabled },
+                                set: { store.setOnlinePopularityEnabled($0) }
+                            ))
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                            .tint(EchoTheme.neoMint)
+                        }
+
+                        Divider().overlay(EchoTheme.border)
+
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Library Stats Summary")
+                                    .font(.system(size: 12.5, weight: .semibold))
+                                    .foregroundStyle(EchoTheme.textPrimary)
+                                Text("Your total plays: \(store.totalLibraryUserPlays) · Tracks with online popularity: \(store.tracksWithOnlinePopularityCount) / \(store.scopedTracks.count)")
+                                    .font(.system(size: 11.5, design: .monospaced))
+                                    .foregroundStyle(EchoTheme.textSecondary)
+                            }
+                            Spacer()
+
+                            if store.isBatchFetchingPopularity, let prog = store.popularityBatchProgress {
+                                HStack(spacing: 8) {
+                                    ProgressView().controlSize(.small)
+                                    Text("Scanning \(prog.done)/\(prog.total) albums")
+                                        .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                                        .foregroundStyle(EchoTheme.neoCyan)
+                                    Button("Stop") {
+                                        store.cancelPopularityBatchFetch()
+                                    }
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(EchoTheme.dangerCoral.opacity(0.18))
+                                    .foregroundStyle(EchoTheme.dangerCoral)
+                                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                    .buttonStyle(.plain)
+                                }
+                            } else {
+                                Button {
+                                    store.batchFetchPopularityForLibrary(maxAlbums: 120)
+                                } label: {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "chart.bar.xaxis")
+                                        Text("Scan Popularity")
+                                    }
+                                    .font(.system(size: 11.5, weight: .semibold))
+                                    .padding(.horizontal, 11)
+                                    .padding(.vertical, 6)
+                                    .background(EchoTheme.neoCyan.opacity(0.16))
+                                    .foregroundStyle(EchoTheme.neoCyan)
+                                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                    .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(EchoTheme.neoCyan.opacity(0.45), lineWidth: 1))
+                                }
+                                .buttonStyle(.plain)
+                                .help("Fetch online popularity scores for up to 120 albums missing popularity data.")
+                            }
+
+                            if store.totalLibraryUserPlays > 0 {
+                                Button("Reset My Plays") {
+                                    showResetPlaysConfirm = true
+                                }
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(EchoTheme.dangerCoral.opacity(0.14))
+                                .foregroundStyle(EchoTheme.dangerCoral)
+                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                .buttonStyle(.plain)
+                                .help("Reset all personal play counters back to 0 (online popularity cache is preserved).")
+                            }
+                        }
+
+                        Divider().overlay(EchoTheme.border)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Optional: Last.fm API Key (Exact Global Scrobble Play Counts)")
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .foregroundStyle(EchoTheme.textPrimary)
+                            Text("Leave blank to use built-in zero-config Deezer popularity. Add a free Last.fm API key to also display exact global play & listener counts in tooltips.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(EchoTheme.textMuted)
+                            HStack(spacing: 8) {
+                                SecureField("Paste Last.fm API key (optional)", text: $lastFMKeyDraft)
+                                    .neoTextField()
+                                    .frame(maxWidth: 340)
+                                NeoSecondaryButton(title: "Save Key") {
+                                    store.setLastFMAPIKey(lastFMKeyDraft)
+                                }
+                                if !store.lastFMAPIKey.isEmpty {
+                                    NeoSecondaryButton(title: "Clear", accent: EchoTheme.textSecondary) {
+                                        lastFMKeyDraft = ""
+                                        store.setLastFMAPIKey("")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(14)
+                    .background(EchoTheme.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard))
+                    .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusCard).strokeBorder(EchoTheme.border, lineWidth: 1))
+                }
+
+                // 5. Optional Lidarr Integration
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("LIDARR DOWNLOADS INTEGRATION (OPTIONAL)")
+                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                        .tracking(1.2)
+                        .foregroundStyle(EchoTheme.neoCyan)
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack(spacing: 16) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack(spacing: 8) {
+                                    Text("Enable Lidarr Downloads UI")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(EchoTheme.textPrimary)
+                                    if let status = store.lidarrStatus {
+                                        Text("CONNECTED · v\(status.version)")
+                                            .font(.system(size: 8.5, weight: .black, design: .monospaced))
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 2)
+                                            .background(EchoTheme.neoMint.opacity(0.18))
+                                            .foregroundStyle(EchoTheme.neoMint)
+                                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                                    }
+                                }
+                                Text("Adds a Downloads (Lidarr) section to the sidebar so you can search albums, tracks, or artists, order downloads into Lidarr, and monitor the live download queue.")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(EchoTheme.textSecondary)
+                            }
+                            Spacer()
+                            Toggle("", isOn: Binding(
+                                get: { store.lidarrConfig.isEnabled },
+                                set: { enabled in
+                                    var cfg = store.lidarrConfig
+                                    cfg.isEnabled = enabled
+                                    store.saveLidarrConfig(cfg)
+                                    if enabled && cfg.isConfigured {
+                                        store.testLidarrConnection(silent: true)
+                                    }
+                                }
+                            ))
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                            .tint(EchoTheme.neoMint)
+                        }
+
+                        if store.lidarrConfig.isEnabled {
+                            Divider().overlay(EchoTheme.border)
+
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack(spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Lidarr Server URL")
+                                            .font(.system(size: 11.5, weight: .semibold))
+                                            .foregroundStyle(EchoTheme.textSecondary)
+                                        TextField("http://192.168.1.10:8686", text: $lidarrURLDraft)
+                                            .neoTextField()
+                                    }
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("API Key (Lidarr → Settings → General)")
+                                            .font(.system(size: 11.5, weight: .semibold))
+                                            .foregroundStyle(EchoTheme.textSecondary)
+                                        SecureField("Paste Lidarr API key", text: $lidarrKeyDraft)
+                                            .neoTextField()
+                                    }
+                                }
+
+                                HStack(spacing: 10) {
+                                    NeoPrimaryButton(
+                                        title: store.isTestingLidarrConnection ? "Connecting..." : "Save & Test Connection",
+                                        icon: "bolt.horizontal.fill",
+                                        disabled: store.isTestingLidarrConnection
+                                    ) {
+                                        var cfg = store.lidarrConfig
+                                        cfg.baseURL = lidarrURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        cfg.apiKey = lidarrKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        store.saveLidarrConfig(cfg)
+                                        store.testLidarrConnection()
+                                    }
+
+                                    if store.lidarrConfig.isConfigured {
+                                        NeoSecondaryButton(title: "Open Lidarr Downloads", icon: "arrow.down.to.line.compact") {
+                                            store.navigate(to: .lidarr)
+                                        }
+                                    }
+
+                                    Spacer()
+
+                                    Toggle("Auto-search indexers on order", isOn: Binding(
+                                        get: { store.lidarrConfig.searchOnAdd },
+                                        set: { val in
+                                            var cfg = store.lidarrConfig
+                                            cfg.searchOnAdd = val
+                                            store.saveLidarrConfig(cfg)
+                                        }
+                                    ))
+                                    .toggleStyle(.checkbox)
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(EchoTheme.textSecondary)
+                                }
+
+                                if let err = store.lidarrConnectionError {
+                                    Text(err)
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(EchoTheme.dangerCoral)
+                                }
+                            }
+
+                            if !store.lidarrRootFolders.isEmpty || !store.lidarrQualityProfiles.isEmpty || !store.lidarrMetadataProfiles.isEmpty {
+                                Divider().overlay(EchoTheme.border)
+
+                                HStack(spacing: 14) {
+                                    if !store.lidarrRootFolders.isEmpty {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text("Root Folder")
+                                                .font(.system(size: 11, weight: .semibold))
+                                                .foregroundStyle(EchoTheme.textSecondary)
+                                            NeoPickerDropdown(
+                                                fullWidth: true,
+                                                selection: Binding(
+                                                    get: { store.lidarrConfig.rootFolderPath },
+                                                    set: { path in
+                                                        var cfg = store.lidarrConfig
+                                                        cfg.rootFolderPath = path
+                                                        store.saveLidarrConfig(cfg)
+                                                    }
+                                                ),
+                                                options: store.lidarrRootFolders.map { ($0.path, $0.path) }
+                                            )
+                                        }
+                                    }
+
+                                    if !store.lidarrQualityProfiles.isEmpty {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text("Quality Profile")
+                                                .font(.system(size: 11, weight: .semibold))
+                                                .foregroundStyle(EchoTheme.textSecondary)
+                                            NeoPickerDropdown(
+                                                fullWidth: true,
+                                                selection: Binding<Int?>(
+                                                    get: { store.lidarrConfig.qualityProfileId },
+                                                    set: { qid in
+                                                        var cfg = store.lidarrConfig
+                                                        cfg.qualityProfileId = qid
+                                                        store.saveLidarrConfig(cfg)
+                                                    }
+                                                ),
+                                                options: store.lidarrQualityProfiles.map { (Int?.some($0.id), $0.name) }
+                                            )
+                                        }
+                                    }
+
+                                    if !store.lidarrMetadataProfiles.isEmpty {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text("Metadata Profile")
+                                                .font(.system(size: 11, weight: .semibold))
+                                                .foregroundStyle(EchoTheme.textSecondary)
+                                            NeoPickerDropdown(
+                                                fullWidth: true,
+                                                selection: Binding<Int?>(
+                                                    get: { store.lidarrConfig.metadataProfileId },
+                                                    set: { mid in
+                                                        var cfg = store.lidarrConfig
+                                                        cfg.metadataProfileId = mid
+                                                        store.saveLidarrConfig(cfg)
+                                                    }
+                                                ),
+                                                options: store.lidarrMetadataProfiles.map { (Int?.some($0.id), $0.name) }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(14)
+                    .background(EchoTheme.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard))
+                    .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusCard).strokeBorder(EchoTheme.border, lineWidth: 1))
+                }
+
+                // 6. Data & Storage Paths
                 VStack(alignment: .leading, spacing: 10) {
                     Text("STORAGE & CACHE")
                         .font(.system(size: 10.5, weight: .bold, design: .monospaced))
@@ -352,6 +742,19 @@ struct SettingsView: View {
             RenameDestinationSheet(currentName: dev.name, draftName: $renameDraft) {
                 store.renameDevice(dev, to: renameDraft)
             }
+        }
+        .onAppear {
+            lastFMKeyDraft = store.lastFMAPIKey
+            lidarrURLDraft = store.lidarrConfig.baseURL
+            lidarrKeyDraft = store.lidarrConfig.apiKey
+        }
+        .alert("Reset All Personal Play Counters?", isPresented: $showResetPlaysConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reset All Plays", role: .destructive) {
+                store.resetAllUserPlayCounts()
+            }
+        } message: {
+            Text("This resets your personal play counts across all tracks to 0. Cached online popularity data will be kept.")
         }
     }
 

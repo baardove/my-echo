@@ -41,6 +41,7 @@ struct HomeView: View {
                                 statPill("\(store.artists.count) Artists", icon: "person.2")
                                 statPill("\(store.albums.count) Albums", icon: "square.stack")
                                 statPill("\(store.scopedTracks.count) Tracks", icon: "music.note")
+                                statPill("\(store.totalLibraryUserPlays) Plays", icon: "play.circle")
                                 statPill("\(store.playlists.count) Playlists", icon: "music.note.list")
                                 statPill("\(store.podcasts.count) Podcasts", icon: "mic")
                             }
@@ -88,6 +89,160 @@ struct HomeView: View {
                 if store.scopedTracks.isEmpty {
                     emptyLibraryOnboarding
                 } else {
+                    let topUserTracks = store.mostPlayedTracks(limit: 5)
+                    let topOnlineTracks = store.mostPopularOnlineTracks(limit: 5)
+
+                    // 1. New Arrivals (Newly Downloaded / Added)
+                    if !store.newArrivalAlbums.isEmpty {
+                        VStack(alignment: .leading, spacing: 14) {
+                            HStack(alignment: .firstTextBaseline) {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "arrow.down.circle.fill")
+                                        .font(.system(size: 14.5))
+                                        .foregroundStyle(EchoTheme.neoMint)
+                                    Text("New Arrivals")
+                                        .font(.system(size: 19, weight: .bold))
+                                        .foregroundStyle(EchoTheme.textPrimary)
+                                    Text("Newly downloaded & added")
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(EchoTheme.textMuted)
+                                }
+                                Spacer()
+                                Button("See all") {
+                                    store.albumSortOrder = .newArrivals
+                                    store.navigate(to: .albums)
+                                }
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(EchoTheme.neoMint)
+                                .buttonStyle(.plain)
+                                .help("View all albums sorted by most recently downloaded or added to your library.")
+                            }
+
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 168, maximum: 195), spacing: 16)], spacing: 18) {
+                                ForEach(store.newArrivalAlbums.prefix(10)) { album in
+                                    let arrivalTag = Formatters.relativeArrival(album.latestArrivalDate)
+                                    AlbumCardView(
+                                        album: album,
+                                        cornerBadge: arrivalTag.isEmpty ? nil : arrivalTag,
+                                        cornerBadgeColor: EchoTheme.neoMint
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. New Releases (Newly Released Albums)
+                    if !store.newReleaseAlbums.isEmpty {
+                        VStack(alignment: .leading, spacing: 14) {
+                            HStack(alignment: .firstTextBaseline) {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "sparkles")
+                                        .font(.system(size: 14))
+                                        .foregroundStyle(EchoTheme.neoCyan)
+                                    Text("New Releases")
+                                        .font(.system(size: 19, weight: .bold))
+                                        .foregroundStyle(EchoTheme.textPrimary)
+                                    Text("Latest album releases")
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(EchoTheme.textMuted)
+                                }
+                                Spacer()
+                                Button("See all") {
+                                    store.albumSortOrder = .newReleases
+                                    store.navigate(to: .albums)
+                                }
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(EchoTheme.neoCyan)
+                                .buttonStyle(.plain)
+                                .help("View all albums sorted by newest release year.")
+                            }
+
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 168, maximum: 195), spacing: 16)], spacing: 18) {
+                                ForEach(store.newReleaseAlbums.prefix(10)) { album in
+                                    AlbumCardView(
+                                        album: album,
+                                        cornerBadge: album.year.map { String($0) },
+                                        cornerBadgeColor: EchoTheme.neoCyan
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if !topUserTracks.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "flame.fill")
+                                        .font(.system(size: 14))
+                                        .foregroundStyle(EchoTheme.neoMint)
+                                    Text("Most Played by You")
+                                        .font(.system(size: 19, weight: .bold))
+                                        .foregroundStyle(EchoTheme.textPrimary)
+                                }
+                                Spacer()
+                                Button("Sort All Tracks by Plays") {
+                                    store.trackSortOrder = .mostPlayed
+                                    store.navigate(to: .tracks)
+                                }
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(EchoTheme.neoMint)
+                                .buttonStyle(.plain)
+                            }
+
+                            VStack(spacing: 2) {
+                                trackTableHeader(showAlbum: true)
+                                Divider().overlay(EchoTheme.border).padding(.bottom, 2)
+                                ForEach(Array(topUserTracks.enumerated()), id: \.element.id) { idx, track in
+                                    TrackRowView(track: track, index: idx, showAlbumColumn: true) {
+                                        store.player.play(tracks: topUserTracks, startingAt: idx)
+                                    }
+                                }
+                            }
+                            .padding(10)
+                            .background(EchoTheme.surface)
+                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous).strokeBorder(EchoTheme.border, lineWidth: 1))
+                        }
+                    }
+
+                    if !topOnlineTracks.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "chart.bar.fill")
+                                        .font(.system(size: 13.5))
+                                        .foregroundStyle(EchoTheme.neoCyan)
+                                    Text("Most Popular Online in Your Library")
+                                        .font(.system(size: 19, weight: .bold))
+                                        .foregroundStyle(EchoTheme.textPrimary)
+                                }
+                                Spacer()
+                                Button("Sort All Tracks by Popularity") {
+                                    store.trackSortOrder = .onlinePopularity
+                                    store.navigate(to: .tracks)
+                                }
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(EchoTheme.neoCyan)
+                                .buttonStyle(.plain)
+                            }
+
+                            VStack(spacing: 2) {
+                                trackTableHeader(showAlbum: true)
+                                Divider().overlay(EchoTheme.border).padding(.bottom, 2)
+                                ForEach(Array(topOnlineTracks.enumerated()), id: \.element.id) { idx, track in
+                                    TrackRowView(track: track, index: idx, showAlbumColumn: true) {
+                                        store.player.play(tracks: topOnlineTracks, startingAt: idx)
+                                    }
+                                }
+                            }
+                            .padding(10)
+                            .background(EchoTheme.surface)
+                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous).strokeBorder(EchoTheme.border, lineWidth: 1))
+                        }
+                    }
+
                     // Featured Albums Shelf
                     VStack(alignment: .leading, spacing: 14) {
                         HStack {
@@ -232,23 +387,38 @@ struct ArtistCardView: View {
                         store.player.play(tracks: artist.tracks, startingAt: 0)
                     } label: {
                         RoundedRectangle(cornerRadius: EchoTheme.radiusControl)
-                            .fill(EchoTheme.neoMint)
-                            .frame(width: 38, height: 36)
-                            .overlay(Image(systemName: "play.fill").foregroundStyle(.black).font(.system(size: 15, weight: .bold)))
-                            .shadow(color: EchoTheme.neoMint.opacity(0.45), radius: 8, y: 3)
+                            .fill(EchoTheme.neoMint.opacity(0.76))
+                            .frame(width: 28, height: 28)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: EchoTheme.radiusControl)
+                                    .strokeBorder(Color.white.opacity(0.28), lineWidth: 0.75)
+                            )
+                            .overlay(Image(systemName: "play.fill").foregroundStyle(.black.opacity(0.9)).font(.system(size: 11, weight: .bold)))
+                            .shadow(color: Color.black.opacity(0.35), radius: 5, y: 2)
                     }
                     .buttonStyle(.plain)
-                    .padding(4)
+                    .padding(6)
                 }
 
-                // Sync status corner pill
-                if state != .none || isHovered {
-                    SyncStatePillButton(state: state, compact: true) {
-                        store.toggleArtistSync(artist)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .padding(2)
-                }
+                // Top-right P (Playlist) & S (Sync / Subscription) corner pills
+                let plState = store.focusedPlaylistState(for: artist.tracks)
+                let plName = store.focusedPlaylist?.name ?? "My Playlist"
+                let targetName = store.activeDevice?.name ?? "selected destination"
+                CardPSBadgeStrip(
+                    playlistState: plState,
+                    syncState: state,
+                    isCardHovered: isHovered,
+                    playlistTooltip: plState == .full
+                        ? "Remove '\(artist.name)' from playlist '\(plName)'."
+                        : "Add all tracks by '\(artist.name)' to playlist '\(plName)'.",
+                    syncTooltip: state == .full
+                        ? "Synced to '\(targetName)'. Click to remove '\(artist.name)'."
+                        : "Include '\(artist.name)' in '\(targetName)' sync.",
+                    onTogglePlaylist: { store.toggleTracksInFocusedPlaylist(artist.tracks, label: artist.name) },
+                    onToggleSync: { store.toggleArtistSync(artist) }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .padding(5)
             }
 
             VStack(alignment: .leading, spacing: 3) {
@@ -288,11 +458,29 @@ struct ArtistCardView: View {
 struct ArtistDetailView: View {
     @Environment(EchoStore.self) private var store
     let artistKey: String
+    @State private var tracksSort = TrackTableSortState()
 
     var body: some View {
-        if let artist = store.artistsByKey[artistKey] {
+        if let resolved = store.resolveArtist(forKey: artistKey) {
+            let artist = resolved.artist
+            let appearsOnTracks = resolved.appearsOnTracks
+            let combinedTracks = artist.tracks + appearsOnTracks
             let glow = ArtworkImageLoader.shared.dominantColor(forHash: artist.artworkHash, artworkCache: store.artworkCache)
             let state = store.selectionState(forArtist: artist)
+            let totalPlays = store.totalUserPlays(for: artist)
+            let avgPop = store.averageOnlinePopularity(for: artist)
+            let onlineFans = store.artistStats[artist.id]?.fans
+            let isFetchingPop = store.fetchingPopularityKeys.contains("artist:\(artist.id)")
+            let popularTracks: [Track] = combinedTracks
+                .filter { (store.stats(for: $0).onlinePopularity ?? 0) > 0 || store.userPlayCount(for: $0) > 0 }
+                .sorted { a, b in
+                    let popA = store.stats(for: a).onlinePopularity ?? 0
+                    let popB = store.stats(for: b).onlinePopularity ?? 0
+                    if popA != popB { return popA > popB }
+                    return store.userPlayCount(for: a) > store.userPlayCount(for: b)
+                }
+                .prefix(5)
+                .map { $0 }
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 26) {
@@ -321,9 +509,26 @@ struct ArtistDetailView: View {
                                     .font(.system(size: 36, weight: .black, design: .rounded))
                                     .foregroundStyle(EchoTheme.textPrimary)
 
-                                Text("\(artist.albums.count) albums · \(artist.tracks.count) tracks · \(Formatters.bytes(artist.totalSize))")
-                                    .font(.system(size: 12.5))
-                                    .foregroundStyle(EchoTheme.textSecondary)
+                                HStack(spacing: 8) {
+                                    Text("\(artist.albums.count) albums · \(artist.tracks.count) tracks · \(Formatters.bytes(artist.totalSize))")
+                                        .foregroundStyle(EchoTheme.textSecondary)
+                                    if totalPlays > 0 {
+                                        Text("· \(totalPlays) plays")
+                                            .foregroundStyle(EchoTheme.neoMint)
+                                            .fontWeight(.semibold)
+                                    }
+                                    if let onlineFans, onlineFans > 0 {
+                                        Text("· \(Formatters.compactCount(onlineFans)) online fans")
+                                            .foregroundStyle(EchoTheme.neoCyan)
+                                            .fontWeight(.semibold)
+                                    }
+                                    if let avgPop {
+                                        Text("· Avg pop \(avgPop)/100")
+                                            .foregroundStyle(EchoTheme.hiResGold)
+                                            .fontWeight(.semibold)
+                                    }
+                                }
+                                .font(.system(size: 12.5))
 
                                 HStack(spacing: 10) {
                                     NeoPrimaryButton(title: "Play All", icon: "play.fill") {
@@ -331,6 +536,44 @@ struct ArtistDetailView: View {
                                     }
                                     SyncStatePillButton(state: state, label: "Sync Entire Artist") {
                                         store.toggleArtistSync(artist)
+                                    }
+                                    Button {
+                                        store.ensurePopularityLoaded(forArtist: artist, force: true)
+                                    } label: {
+                                        Group {
+                                            if isFetchingPop {
+                                                ProgressView()
+                                                    .controlSize(.small)
+                                                    .frame(width: 30, height: 30)
+                                            } else {
+                                                Image(systemName: "chart.bar.xaxis")
+                                                    .font(.system(size: 12.5, weight: .semibold))
+                                                    .frame(width: 30, height: 30)
+                                            }
+                                        }
+                                        .background(EchoTheme.surfaceElevated)
+                                        .foregroundStyle(EchoTheme.neoCyan)
+                                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                                        .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.borderStrong, lineWidth: 1))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(isFetchingPop)
+                                    .help("Fetch or refresh online popularity scores and fan counts for '\(artist.name)'.")
+
+                                    if store.lidarrConfig.isEnabled {
+                                        Button {
+                                            store.openLidarrSearch(query: artist.name, mode: .albums)
+                                        } label: {
+                                            Image(systemName: "arrow.down.to.line.compact")
+                                                .font(.system(size: 12.5, weight: .bold))
+                                                .frame(width: 30, height: 30)
+                                                .background(EchoTheme.surfaceElevated)
+                                                .foregroundStyle(EchoTheme.neoMint)
+                                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                                                .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.neoMint.opacity(0.45), lineWidth: 1))
+                                        }
+                                        .buttonStyle(.plain)
+                                        .help("Search Lidarr for more albums by '\(artist.name)' to order & download.")
                                     }
                                     if let focused = store.focusedPlaylist {
                                         Button {
@@ -348,30 +591,57 @@ struct ArtistDetailView: View {
                                         .help("Add all tracks by '\(artist.name)' to focused playlist '\(focused.name)'.")
                                     }
                                     if !store.playlists.isEmpty {
-                                        Menu {
-                                            ForEach(store.playlists) { pl in
-                                                Button(pl.name) {
+                                        NeoIconMenuButton(icon: "text.badge.plus", accent: EchoTheme.neoMint, size: 30) {
+                                            store.playlists.map { pl in
+                                                .action(title: pl.name, icon: "music.note.list") {
                                                     store.addTracks(artist.tracks, toPlaylistID: pl.id)
                                                 }
                                             }
-                                        } label: {
-                                            Image(systemName: "text.badge.plus")
-                                                .font(.system(size: 12.5, weight: .semibold))
-                                                .frame(width: 30, height: 30)
-                                                .background(EchoTheme.surfaceElevated)
-                                                .foregroundStyle(EchoTheme.textPrimary)
-                                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
                                         }
-                                        .menuStyle(.borderlessButton)
                                         .fixedSize()
                                         .help("Choose any playlist to add all tracks by '\(artist.name)'.")
                                     }
                                 }
                                 .padding(.top, 4)
                             }
-                            Spacer()
+                            .layoutPriority(1)
+
+                            Spacer(minLength: 16)
+
+                            ViewThatFits(in: .horizontal) {
+                                ArtistHeroEditorialPanel(artist: artist)
+                                EmptyView()
+                            }
                         }
                         .padding(26)
+                    }
+                    .task(id: artist.id) {
+                        store.ensureEditorialLoaded(forArtist: artist)
+                    }
+
+                    // Spotify-style Popular Tracks for this Artist
+                    if !popularTracks.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "chart.bar.fill")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(EchoTheme.neoCyan)
+                                Text("Popular")
+                                    .font(.system(size: 18, weight: .bold))
+                                    .foregroundStyle(EchoTheme.textPrimary)
+                            }
+                            .padding(.bottom, 2)
+
+                            trackTableHeader(showAlbum: true)
+                            Divider().overlay(EchoTheme.border).padding(.bottom, 2)
+
+                            ForEach(Array(popularTracks.enumerated()), id: \.element.id) { idx, track in
+                                TrackRowView(track: track, index: idx, showAlbumColumn: true) {
+                                    store.player.play(tracks: popularTracks, startingAt: idx)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 26)
                     }
 
                     // Albums by Artist
@@ -388,16 +658,71 @@ struct ArtistDetailView: View {
                     }
                     .padding(.horizontal, 26)
 
-                    // All Tracks by Artist
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("All Tracks")
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundStyle(EchoTheme.textPrimary)
-                            .padding(.bottom, 4)
+                    // All Tracks by Artist (grouped by compact album headers with same height as track rows)
+                    let sortedArtistTracks = store.sortTracks(combinedTracks, by: tracksSort)
+                    let groupedTrackSections: [(albumKey: String, albumTitle: String, year: Int?, artworkHash: String?, isCollabAlbum: Bool, tracks: [Track])] = {
+                        var order: [String] = []
+                        var map: [String: [Track]] = [:]
+                        for tr in sortedArtistTracks {
+                            let resolvedKey = store.albumByTrackID[tr.id]?.id ?? tr.albumKey
+                            if map[resolvedKey] == nil {
+                                order.append(resolvedKey)
+                            }
+                            map[resolvedKey, default: []].append(tr)
+                        }
+                        let ownAlbumKeys = Set(artist.albums.map(\.id))
+                        return order.compactMap { key in
+                            guard let list = map[key], let first = list.first else { return nil }
+                            let albumObj = store.albumsByKey[key]
+                            return (
+                                albumKey: key,
+                                albumTitle: albumObj?.title ?? first.effectiveAlbum,
+                                year: albumObj?.year ?? list.compactMap(\.year).first,
+                                artworkHash: albumObj?.artworkHash ?? list.first(where: { $0.artworkHash != nil })?.artworkHash,
+                                isCollabAlbum: !ownAlbumKeys.contains(key),
+                                tracks: list
+                            )
+                        }
+                    }()
+                    let flattenedOrderedTracks = groupedTrackSections.flatMap(\.tracks)
+                    let flatIndexByID = Dictionary(uniqueKeysWithValues: flattenedOrderedTracks.enumerated().map { ($0.element.id, $0.offset) })
 
-                        ForEach(Array(artist.tracks.enumerated()), id: \.element.id) { idx, track in
-                            TrackRowView(track: track, index: idx, showAlbumColumn: true) {
-                                store.player.play(tracks: artist.tracks, startingAt: idx)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) {
+                            Text("All Tracks")
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundStyle(EchoTheme.textPrimary)
+                            if !appearsOnTracks.isEmpty {
+                                Text("incl. \(appearsOnTracks.count) collab\(appearsOnTracks.count == 1 ? "" : "s")")
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(EchoTheme.neoCyan)
+                            }
+                        }
+                        .padding(.bottom, 4)
+
+                        SortableTrackTableHeader(showAlbum: false, sortState: $tracksSort)
+                        Divider().overlay(EchoTheme.border).padding(.bottom, 2)
+
+                        ForEach(groupedTrackSections, id: \.albumKey) { section in
+                            CompactAlbumGroupHeaderRow(
+                                albumKey: section.albumKey,
+                                title: section.albumTitle,
+                                year: section.year,
+                                artworkHash: section.artworkHash,
+                                isCollabAlbum: section.isCollabAlbum,
+                                tracks: section.tracks
+                            ) {
+                                if let first = section.tracks.first, let startIdx = flatIndexByID[first.id] {
+                                    store.player.play(tracks: flattenedOrderedTracks, startingAt: startIdx)
+                                }
+                            }
+                            .padding(.top, section.albumKey == groupedTrackSections.first?.albumKey ? 0 : 6)
+
+                            ForEach(Array(section.tracks.enumerated()), id: \.element.id) { localIdx, track in
+                                let flatIdx = flatIndexByID[track.id] ?? localIdx
+                                TrackRowView(track: track, index: localIdx, showAlbumColumn: false) {
+                                    store.player.play(tracks: flattenedOrderedTracks, startingAt: flatIdx)
+                                }
                             }
                         }
                     }
@@ -405,8 +730,131 @@ struct ArtistDetailView: View {
                     .padding(.bottom, 28)
                 }
             }
+            .task(id: artist.id) {
+                store.ensurePopularityLoaded(forArtist: artist)
+            }
         } else {
             ContentUnavailableView("Artist Not Found", systemImage: "person.slash")
+        }
+    }
+}
+
+/// Compact album group header with the exact same vertical height & alignment as `TrackRowView` (36×36 art, 6pt v-padding).
+private struct CompactAlbumGroupHeaderRow: View {
+    @Environment(EchoStore.self) private var store
+    let albumKey: String
+    let title: String
+    let year: Int?
+    let artworkHash: String?
+    let isCollabAlbum: Bool
+    let tracks: [Track]
+    let onPlayAlbum: () -> Void
+
+    @State private var isHovered = false
+
+    private var totalDuration: TimeInterval {
+        tracks.reduce(0) { $0 + $1.duration }
+    }
+
+    var body: some View {
+        let albumObj = store.albumsByKey[albumKey]
+        let syncState: SyncSelectionState = albumObj.map { store.selectionState(forAlbum: $0) } ?? .none
+
+        HStack(spacing: 12) {
+            // 26pt leading slot matching TrackRowView's `#` column
+            Button(action: onPlayAlbum) {
+                Image(systemName: isHovered ? "play.fill" : "opticaldisc.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(isHovered ? EchoTheme.neoMint : EchoTheme.neoCyan)
+            }
+            .buttonStyle(.plain)
+            .frame(width: 26)
+            .help("Play tracks from '\(title)'")
+
+            // 36×36 artwork + album title & metadata (same dimensions as TrackRowView)
+            Button {
+                store.openAlbum(key: albumKey)
+            } label: {
+                HStack(spacing: 10) {
+                    ArtworkView(hash: artworkHash, artworkCache: store.artworkCache, cornerRadius: EchoTheme.radiusSmall, iconSize: 13)
+                        .frame(width: 36, height: 36)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(title)
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(isHovered ? EchoTheme.neoMint : EchoTheme.textPrimary)
+                                .lineLimit(1)
+
+                            if isCollabAlbum {
+                                Text("APPEARS ON")
+                                    .font(.system(size: 8, weight: .black, design: .monospaced))
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 1.5)
+                                    .background(EchoTheme.neoCyan.opacity(0.16))
+                                    .foregroundStyle(EchoTheme.neoCyan)
+                                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                            }
+                        }
+
+                        Text("\(year.map { "\($0) · " } ?? "")\(tracks.count) track\(tracks.count == 1 ? "" : "s")")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(EchoTheme.textMuted)
+                            .lineLimit(1)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .frame(minWidth: 180, maxWidth: .infinity, alignment: .leading)
+            .help("Open album '\(title)'")
+
+            // Sync toggle aligned with TrackRowView's `S` column
+            if let albumObj {
+                let isSynced = syncState == .full
+                let isPartial = syncState == .partial
+                Button {
+                    store.toggleAlbumSync(albumObj)
+                } label: {
+                    Text(isPartial ? "·" : "S")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .frame(width: 24, height: 24)
+                        .background(
+                            RoundedRectangle(cornerRadius: EchoTheme.radiusSmall)
+                                .fill(isSynced ? EchoTheme.neoMint.opacity(0.24) : (isPartial ? EchoTheme.neoCyan.opacity(0.18) : EchoTheme.surfaceElevated.opacity(0.55)))
+                        )
+                        .foregroundStyle(isSynced ? EchoTheme.neoMint : (isPartial ? EchoTheme.neoCyan : EchoTheme.textMuted))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: EchoTheme.radiusSmall)
+                                .strokeBorder(isSynced ? EchoTheme.neoMint.opacity(0.8) : EchoTheme.border, lineWidth: isSynced ? 1.1 : 0.85)
+                        )
+                }
+                .buttonStyle(.plain)
+                .frame(width: 30)
+                .help("Toggle entire album '\(title)' for sync.")
+            }
+
+            // Total duration aligned with TrackRowView's `TIME` column
+            Text(Formatters.duration(totalDuration))
+                .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                .foregroundStyle(EchoTheme.textSecondary)
+                .frame(width: 44, alignment: .trailing)
+
+            // Trailing 24pt spacer matching TrackRowView's ellipsis button column
+            Color.clear.frame(width: 24, height: 24)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                .fill(EchoTheme.surfaceElevated.opacity(isHovered ? 0.82 : 0.52))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                .strokeBorder(isHovered ? EchoTheme.neoCyan.opacity(0.45) : EchoTheme.border, lineWidth: 1)
+        )
+        .onHover { hovering in
+            isHovered = hovering
         }
     }
 }
@@ -419,7 +867,7 @@ struct AlbumsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                HStack {
+                HStack(spacing: 12) {
                     Text("Albums")
                         .font(.system(size: 26, weight: .black, design: .rounded))
                         .foregroundStyle(EchoTheme.textPrimary)
@@ -427,11 +875,65 @@ struct AlbumsView: View {
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                         .foregroundStyle(EchoTheme.textMuted)
                     Spacer()
+
+                    if store.isBatchFetchingPopularity, let prog = store.popularityBatchProgress {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Popularity \(prog.done)/\(prog.total)")
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(EchoTheme.neoCyan)
+                            Button {
+                                store.cancelPopularityBatchFetch()
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 9.5, weight: .bold))
+                                    .foregroundStyle(EchoTheme.textMuted)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Stop scanning online popularity.")
+                        }
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(EchoTheme.surfaceElevated)
+                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                    } else {
+                        NeoSecondaryButton(title: "Fetch Popularity", icon: "chart.bar.xaxis") {
+                            store.batchFetchPopularityForLibrary()
+                        }
+                        .help("Batch-fetch online popularity scores from Deezer (plus Last.fm if configured) for albums in this library.")
+                    }
+
+                    NeoPickerDropdown(
+                        prefix: "Sort",
+                        icon: "arrow.up.arrow.down",
+                        selection: Binding(
+                            get: { store.albumSortOrder },
+                            set: { store.albumSortOrder = $0 }
+                        ),
+                        options: AlbumSortOrder.allCases.map { ($0, $0.rawValue) }
+                    )
+                    .fixedSize()
+                    .help("Sort albums alphabetically, by your plays, by online popularity, or by release year.")
                 }
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 168, maximum: 198), spacing: 16)], spacing: 18) {
                     ForEach(store.filteredAlbums) { album in
-                        AlbumCardView(album: album)
+                        let badge: (String, Color)? = {
+                            switch store.albumSortOrder {
+                            case .newArrivals:
+                                let tag = Formatters.relativeArrival(album.latestArrivalDate)
+                                return tag.isEmpty ? nil : (tag, EchoTheme.neoMint)
+                            case .newReleases:
+                                return album.year.map { (String($0), EchoTheme.neoCyan) }
+                            default:
+                                return nil
+                            }
+                        }()
+                        AlbumCardView(
+                            album: album,
+                            cornerBadge: badge?.0,
+                            cornerBadgeColor: badge?.1 ?? EchoTheme.neoMint
+                        )
                     }
                 }
             }
@@ -443,6 +945,8 @@ struct AlbumsView: View {
 struct AlbumCardView: View {
     @Environment(EchoStore.self) private var store
     let album: AlbumGroup
+    var cornerBadge: String? = nil
+    var cornerBadgeColor: Color = EchoTheme.neoMint
     @State private var isHovered = false
 
     var body: some View {
@@ -453,47 +957,111 @@ struct AlbumCardView: View {
                     .aspectRatio(1, contentMode: .fit)
                     .shadow(color: .black.opacity(0.45), radius: 10, y: 4)
 
+                if let cornerBadge {
+                    Text(cornerBadge)
+                        .font(.system(size: 9, weight: .black, design: .monospaced))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2.5)
+                        .background(Color.black.opacity(0.76))
+                        .foregroundStyle(cornerBadgeColor)
+                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: EchoTheme.radiusSmall)
+                                .strokeBorder(cornerBadgeColor.opacity(0.55), lineWidth: 0.9)
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .padding(6)
+                }
+
                 if isHovered {
                     Button {
                         store.player.play(tracks: album.tracks, startingAt: 0)
                     } label: {
                         RoundedRectangle(cornerRadius: EchoTheme.radiusControl)
-                            .fill(EchoTheme.neoMint)
-                            .frame(width: 38, height: 36)
-                            .overlay(Image(systemName: "play.fill").foregroundStyle(.black).font(.system(size: 15, weight: .bold)))
-                            .shadow(color: EchoTheme.neoMint.opacity(0.45), radius: 8, y: 3)
+                            .fill(EchoTheme.neoMint.opacity(0.76))
+                            .frame(width: 28, height: 28)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: EchoTheme.radiusControl)
+                                    .strokeBorder(Color.white.opacity(0.28), lineWidth: 0.75)
+                            )
+                            .overlay(Image(systemName: "play.fill").foregroundStyle(.black.opacity(0.9)).font(.system(size: 11, weight: .bold)))
+                            .shadow(color: Color.black.opacity(0.35), radius: 5, y: 2)
                     }
                     .buttonStyle(.plain)
-                    .padding(8)
-                }
-
-                if state != .none || isHovered {
-                    SyncStatePillButton(state: state, compact: true) {
-                        store.toggleAlbumSync(album)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                     .padding(6)
                 }
+
+                // Top-right P (Playlist) & S (Sync / Subscription) corner pills
+                let plState = store.focusedPlaylistState(for: album.tracks)
+                let plName = store.focusedPlaylist?.name ?? "My Playlist"
+                let targetName = store.activeDevice?.name ?? "selected destination"
+                CardPSBadgeStrip(
+                    playlistState: plState,
+                    syncState: state,
+                    isCardHovered: isHovered,
+                    playlistTooltip: plState == .full
+                        ? "Remove '\(album.title)' from playlist '\(plName)'."
+                        : "Add '\(album.title)' to playlist '\(plName)'.",
+                    syncTooltip: state == .full
+                        ? "Synced to '\(targetName)'. Click to remove '\(album.title)'."
+                        : "Include '\(album.title)' in '\(targetName)' sync.",
+                    onTogglePlaylist: { store.toggleTracksInFocusedPlaylist(album.tracks, label: album.title) },
+                    onToggleSync: { store.toggleAlbumSync(album) }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .padding(6)
             }
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(album.title)
-                    .font(.system(size: 13.5, weight: .bold))
-                    .foregroundStyle(EchoTheme.textPrimary)
-                    .lineLimit(1)
-                Text(album.artist)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(EchoTheme.textSecondary)
-                    .lineLimit(1)
+                HoverLinkText(
+                    text: album.title,
+                    font: .system(size: 13.5, weight: .bold),
+                    color: EchoTheme.textPrimary,
+                    hoverColor: EchoTheme.neoMint,
+                    tip: "Open album '\(album.title)'"
+                ) {
+                    store.openAlbum(key: album.id)
+                }
+                ArtistLinksView(
+                    rawArtists: album.artist,
+                    font: .system(size: 11.5),
+                    color: EchoTheme.textSecondary,
+                    hoverColor: EchoTheme.neoCyan
+                ) { artistName in
+                    store.openArtist(name: artistName)
+                }
                 HStack(spacing: 6) {
+                    let albumPlays = store.totalUserPlays(for: album)
+                    let albumPop = store.averageOnlinePopularity(for: album)
                     if let year = album.year {
-                        Text("\(year)")
+                        Text(String(year))
                             .font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(EchoTheme.textMuted)
                     }
                     Text("\(album.tracks.count) tracks")
                         .font(.system(size: 10))
                         .foregroundStyle(EchoTheme.textMuted)
+                    Spacer(minLength: 2)
+                    if albumPlays > 0 {
+                        HStack(spacing: 2) {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 7.5))
+                            Text(Formatters.compactCount(albumPlays))
+                                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                        }
+                        .foregroundStyle(EchoTheme.neoMint)
+                        .help("Total user plays across tracks in '\(album.title)': \(albumPlays)")
+                    }
+                    if let albumPop {
+                        HStack(spacing: 2) {
+                            Image(systemName: "chart.bar.fill")
+                                .font(.system(size: 7.5))
+                            Text("\(albumPop)")
+                                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                        }
+                        .foregroundStyle(EchoTheme.neoCyan)
+                        .help("Average online popularity score for '\(album.title)': \(albumPop)/100")
+                    }
                 }
             }
         }
@@ -523,14 +1091,18 @@ struct AlbumCardView: View {
 struct AlbumDetailView: View {
     @Environment(EchoStore.self) private var store
     let albumKey: String
+    @State private var tracksSort = TrackTableSortState()
 
     var body: some View {
         if let album = store.albumsByKey[albumKey] {
             let glow = ArtworkImageLoader.shared.dominantColor(forHash: album.artworkHash, artworkCache: store.artworkCache)
             let state = store.selectionState(forAlbum: album)
+            let albumPlays = store.totalUserPlays(for: album)
+            let avgPop = store.averageOnlinePopularity(for: album)
+            let isFetchingPop = store.fetchingPopularityKeys.contains("album:\(album.id)")
             let samplePath: String? = {
                 guard let first = album.tracks.first, let dev = store.activeDevice else { return nil }
-                return PathFormatter.relativeTrackPath(for: first, profile: dev)
+                return PathFormatter.relativeTrackPath(for: first, profile: dev, albumArtistOverride: album.artist)
             }()
 
             ScrollView {
@@ -544,9 +1116,9 @@ struct AlbumDetailView: View {
                         .frame(height: 235)
 
                         HStack(alignment: .bottom, spacing: 22) {
-                            ArtworkView(hash: album.artworkHash, artworkCache: store.artworkCache, cornerRadius: EchoTheme.radiusCard, iconSize: 50)
-                                .frame(width: 174, height: 174)
-                                .shadow(color: .black.opacity(0.55), radius: 20, y: 10)
+                            AlbumHeroCoverButton(album: album, artworkCache: store.artworkCache) {
+                                store.openAlbumLightbox(album)
+                            }
 
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("ALBUM")
@@ -560,19 +1132,31 @@ struct AlbumDetailView: View {
                                     .lineLimit(2)
 
                                 HStack(spacing: 8) {
-                                    Button(album.artist) {
-                                        store.navigate(to: .artistDetail(album.artist.lowercased()))
+                                    ArtistLinksView(
+                                        rawArtists: album.artist,
+                                        font: .system(size: 13.5, weight: .bold),
+                                        color: EchoTheme.textPrimary,
+                                        hoverColor: EchoTheme.neoMint
+                                    ) { artistName in
+                                        store.openArtist(name: artistName)
                                     }
-                                    .font(.system(size: 13.5, weight: .bold))
-                                    .foregroundStyle(EchoTheme.textPrimary)
-                                    .buttonStyle(.plain)
 
                                     if let y = album.year {
-                                        Text("· \(y)")
+                                        Text("· \(String(y))")
                                             .foregroundStyle(EchoTheme.textSecondary)
                                     }
                                     Text("· \(album.tracks.count) songs · \(Formatters.duration(album.totalDuration)) · \(Formatters.bytes(album.totalSize))")
                                         .foregroundStyle(EchoTheme.textSecondary)
+                                    if albumPlays > 0 {
+                                        Text("· \(albumPlays) plays")
+                                            .foregroundStyle(EchoTheme.neoMint)
+                                            .fontWeight(.semibold)
+                                    }
+                                    if let avgPop {
+                                        Text("· Pop \(avgPop)/100")
+                                            .foregroundStyle(EchoTheme.neoCyan)
+                                            .fontWeight(.semibold)
+                                    }
                                 }
                                 .font(.system(size: 12.5))
 
@@ -599,6 +1183,28 @@ struct AlbumDetailView: View {
                                     SyncStatePillButton(state: state, label: "Sync Entire Album") {
                                         store.toggleAlbumSync(album)
                                     }
+                                    Button {
+                                        store.ensurePopularityLoaded(forAlbum: album, force: true)
+                                    } label: {
+                                        Group {
+                                            if isFetchingPop {
+                                                ProgressView()
+                                                    .controlSize(.small)
+                                                    .frame(width: 30, height: 30)
+                                            } else {
+                                                Image(systemName: "chart.bar.xaxis")
+                                                    .font(.system(size: 12.5, weight: .semibold))
+                                                    .frame(width: 30, height: 30)
+                                            }
+                                        }
+                                        .background(EchoTheme.surfaceElevated)
+                                        .foregroundStyle(EchoTheme.neoCyan)
+                                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                                        .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.borderStrong, lineWidth: 1))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(isFetchingPop)
+                                    .help("Fetch or refresh online popularity scores for all tracks on '\(album.title)'.")
                                     if let focused = store.focusedPlaylist {
                                         Button {
                                             store.addTracks(album.tracks, toPlaylistID: focused.id)
@@ -615,46 +1221,52 @@ struct AlbumDetailView: View {
                                         .help("Add entire album '\(album.title)' to focused playlist '\(focused.name)'.")
                                     }
                                     if !store.playlists.isEmpty {
-                                        Menu {
-                                            ForEach(store.playlists) { pl in
-                                                Button(pl.name) {
+                                        NeoIconMenuButton(icon: "text.badge.plus", accent: EchoTheme.neoMint, size: 30) {
+                                            store.playlists.map { pl in
+                                                .action(title: pl.name, icon: "music.note.list") {
                                                     store.addTracks(album.tracks, toPlaylistID: pl.id)
                                                 }
                                             }
-                                        } label: {
-                                            Image(systemName: "text.badge.plus")
-                                                .font(.system(size: 12.5, weight: .semibold))
-                                                .frame(width: 30, height: 30)
-                                                .background(EchoTheme.surfaceElevated)
-                                                .foregroundStyle(EchoTheme.textPrimary)
-                                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
                                         }
-                                        .menuStyle(.borderlessButton)
                                         .fixedSize()
                                         .help("Choose any playlist to add entire album '\(album.title)'.")
                                     }
                                 }
                                 .padding(.top, 4)
                             }
-                            Spacer()
+                            .layoutPriority(1)
+
+                            Spacer(minLength: 16)
+
+                            ViewThatFits(in: .horizontal) {
+                                AlbumHeroEditorialPanel(album: album)
+                                EmptyView()
+                            }
                         }
                         .padding(26)
                     }
+                    .task(id: album.id) {
+                        store.ensureEditorialLoaded(forAlbum: album)
+                    }
 
                     // Tracklist
+                    let sortedAlbumTracks = store.sortTracks(album.tracks, by: tracksSort)
                     VStack(spacing: 2) {
-                        trackTableHeader(showAlbum: false)
+                        SortableTrackTableHeader(showAlbum: false, sortState: $tracksSort)
                         Divider().overlay(EchoTheme.border).padding(.bottom, 4)
 
-                        ForEach(Array(album.tracks.enumerated()), id: \.element.id) { idx, track in
+                        ForEach(Array(sortedAlbumTracks.enumerated()), id: \.element.id) { idx, track in
                             TrackRowView(track: track, index: idx, showAlbumColumn: false) {
-                                store.player.play(tracks: album.tracks, startingAt: idx)
+                                store.player.play(tracks: sortedAlbumTracks, startingAt: idx)
                             }
                         }
                     }
                     .padding(.horizontal, 26)
                     .padding(.bottom, 28)
                 }
+            }
+            .task(id: album.id) {
+                store.ensurePopularityLoaded(forAlbum: album)
             }
         } else {
             ContentUnavailableView("Album Not Found", systemImage: "opticaldisc")
@@ -670,7 +1282,7 @@ struct TracksView: View {
     var body: some View {
         let items = store.filteredTracks
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
+            HStack(spacing: 12) {
                 Text("All Tracks")
                     .font(.system(size: 26, weight: .black, design: .rounded))
                     .foregroundStyle(EchoTheme.textPrimary)
@@ -678,6 +1290,55 @@ struct TracksView: View {
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                     .foregroundStyle(EchoTheme.textMuted)
                 Spacer()
+
+                if store.isBatchFetchingPopularity, let prog = store.popularityBatchProgress {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Popularity \(prog.done)/\(prog.total)")
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(EchoTheme.neoCyan)
+                        Button {
+                            store.cancelPopularityBatchFetch()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 9.5, weight: .bold))
+                                .foregroundStyle(EchoTheme.textMuted)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Stop scanning online popularity.")
+                    }
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(EchoTheme.surfaceElevated)
+                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                } else {
+                    NeoSecondaryButton(title: "Fetch Popularity", icon: "chart.bar.xaxis") {
+                        store.batchFetchPopularityForLibrary()
+                    }
+                    .help("Batch-fetch online popularity scores from Deezer (plus Last.fm if configured) for albums in this library.")
+                }
+
+                NeoPickerDropdown(
+                    prefix: "Sort",
+                    icon: "arrow.up.arrow.down",
+                    selection: Binding(
+                        get: { store.trackSortOrder },
+                        set: { newOrder in
+                            store.trackTableColumn = nil
+                            store.trackSortOrder = newOrder
+                            switch newOrder {
+                            case .mostPlayed, .onlinePopularity, .recentlyPlayed, .newArrivals:
+                                store.trackSortAscending = false
+                            case .library, .title, .artist:
+                                store.trackSortAscending = true
+                            }
+                        }
+                    ),
+                    options: TrackSortOrder.allCases.map { ($0, $0.rawValue) }
+                )
+                .fixedSize()
+                .help("Sort tracks by library order, your most played, online popularity, recently played, title, or artist.")
+
                 if !items.isEmpty {
                     NeoPrimaryButton(title: "Play All", icon: "play.fill") {
                         store.player.play(tracks: items, startingAt: 0)
@@ -688,8 +1349,14 @@ struct TracksView: View {
             .padding(.top, 22)
             .padding(.bottom, 14)
 
-            trackTableHeader(showAlbum: true)
-                .padding(.horizontal, 26)
+            SortableTrackTableHeader(
+                showAlbum: true,
+                sortState: Binding(
+                    get: { store.tracksViewSortState },
+                    set: { store.tracksViewSortState = $0 }
+                )
+            )
+            .padding(.horizontal, 26)
             Divider().overlay(EchoTheme.border).padding(.horizontal, 26)
 
             ScrollView {
@@ -717,6 +1384,7 @@ struct PlaylistDetailView: View {
     @State private var editName = ""
     @State private var editDesc = ""
     @State private var isDropTargeted = false
+    @State private var tracksSort = TrackTableSortState()
 
     var body: some View {
         if let playlist = store.playlists.first(where: { $0.id == playlistID }) {
@@ -915,18 +1583,20 @@ struct PlaylistDetailView: View {
                         )
                         .padding(.horizontal, 26)
                     } else {
+                        let isCustomOrder = tracksSort.column == .index && tracksSort.ascending
+                        let displayedTracks = store.sortTracks(playlistTracks, by: tracksSort)
                         VStack(spacing: 2) {
-                            trackTableHeader(showAlbum: true, isPlaylist: true)
+                            SortableTrackTableHeader(showAlbum: true, isPlaylist: true, sortState: $tracksSort)
                             Divider().overlay(EchoTheme.border).padding(.bottom, 4)
 
-                            ForEach(Array(playlistTracks.enumerated()), id: \.offset) { idx, track in
+                            ForEach(Array(displayedTracks.enumerated()), id: \.offset) { idx, track in
                                 TrackRowView(
                                     track: track,
                                     index: idx,
                                     showAlbumColumn: true,
-                                    playlistContext: (playlist.id, idx)
+                                    playlistContext: isCustomOrder ? (playlist.id, idx) : nil
                                 ) {
-                                    store.player.play(tracks: playlistTracks, startingAt: idx)
+                                    store.player.play(tracks: displayedTracks, startingAt: idx)
                                 }
                             }
                         }
@@ -972,22 +1642,25 @@ struct SourcesView: View {
                     Spacer()
 
                     HStack(spacing: 10) {
-                        Button {
+                        NeoPickerDropdown(
+                            prefix: "Auto-Scan",
+                            icon: "clock.arrow.2.circlepath",
+                            selection: Binding(
+                                get: { store.autoIndexInterval },
+                                set: { store.setAutoIndexInterval($0) }
+                            ),
+                            options: AutoIndexInterval.allCases.map { ($0, $0.displayName) }
+                        )
+                        .fixedSize()
+                        .help("Automatically re-scan online library folders and NAS shares on a schedule. Silent unless new tracks are found.")
+
+                        NeoSecondaryButton(
+                            title: "Re-Index All",
+                            icon: "arrow.clockwise",
+                            disabled: store.isIndexing || store.sources.isEmpty
+                        ) {
                             store.indexAllSources()
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "arrow.clockwise")
-                                Text("Re-Index All")
-                                    .font(.system(size: 12.5, weight: .semibold))
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(EchoTheme.surfaceElevated)
-                            .foregroundStyle(EchoTheme.textPrimary)
-                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
                         }
-                        .buttonStyle(.plain)
-                        .disabled(store.isIndexing || store.sources.isEmpty)
 
                         NeoPrimaryButton(title: "Add Folder / NAS", icon: "folder.badge.plus") {
                             store.addLibrarySourceViaPanel()
@@ -1094,8 +1767,9 @@ struct SourcesView: View {
                                         .font(.system(size: 12.5, weight: .semibold))
                                         .frame(width: 30, height: 30)
                                         .background(EchoTheme.surfaceElevated)
-                                        .foregroundStyle(EchoTheme.textPrimary)
-                                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                                        .foregroundStyle(EchoTheme.neoMint)
+                                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+                                        .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous).strokeBorder(EchoTheme.neoMint.opacity(0.45), lineWidth: 1))
                                 }
                                 .buttonStyle(.plain)
                                 .disabled(store.isIndexing)
@@ -1130,6 +1804,80 @@ struct SourcesView: View {
     }
 }
 
+struct SortableTrackTableHeader: View {
+    let showAlbum: Bool
+    var isPlaylist: Bool = false
+    @Binding var sortState: TrackTableSortState
+
+    var body: some View {
+        HStack(spacing: 12) {
+            sortableColumn(column: .index, title: "#", width: 26, alignment: .center, tip: "Sort by track order (click again to reverse).")
+            sortableColumn(column: .title, title: "TITLE", minWidth: 180, maxWidth: .infinity, alignment: .leading, tip: "Sort by track title A–Z / Z–A.")
+            if showAlbum {
+                sortableColumn(column: .album, title: "ALBUM", width: 150, alignment: .leading, tip: "Sort by album name.")
+            }
+            sortableColumn(column: .plays, title: "PLAYS", width: 44, alignment: .trailing, tip: "Sort by your personal play count.")
+            sortableColumn(column: .popularity, title: "POP", width: 50, alignment: .trailing, tip: "Sort by online popularity score.")
+            sortableColumn(column: .format, title: "FORMAT", width: 86, alignment: .center, tip: "Sort by audio quality (DSD / Hi-Res / Lossless / Bitrate).")
+            Text(isPlaylist ? "MOVE" : "P")
+                .frame(width: 30)
+                .help(isPlaylist ? "Drag handle to reorder tracks in playlist." : "Playlist membership (P): click to toggle track in your focused playlist.")
+            sortableColumn(column: .sync, title: "S", width: 30, alignment: .center, tip: "Sync status (S): click column header to sort by synced tracks.")
+            sortableColumn(column: .duration, icon: "clock", width: 44, alignment: .trailing, tip: "Sort by track duration.")
+            Color.clear.frame(width: 24, height: 1)
+        }
+        .font(.system(size: 10, weight: .bold, design: .monospaced))
+        .foregroundStyle(EchoTheme.textMuted)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private func sortableColumn(
+        column: TrackTableSortColumn,
+        title: String? = nil,
+        icon: String? = nil,
+        width: CGFloat? = nil,
+        minWidth: CGFloat? = nil,
+        maxWidth: CGFloat? = nil,
+        alignment: Alignment,
+        tip: String
+    ) -> some View {
+        let isActive = sortState.column == column && !(column == .index && sortState.ascending)
+        Button {
+            sortState.toggle(column)
+        } label: {
+            HStack(spacing: 3) {
+                if alignment == .trailing && isActive {
+                    sortArrow
+                }
+                if let icon {
+                    Image(systemName: icon)
+                }
+                if let title {
+                    Text(title)
+                }
+                if alignment != .trailing && isActive {
+                    sortArrow
+                }
+            }
+            .foregroundStyle(isActive ? EchoTheme.neoMint : EchoTheme.textMuted)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .frame(width: width, alignment: alignment)
+        .frame(minWidth: minWidth, maxWidth: maxWidth, alignment: alignment)
+        .help(tip)
+    }
+
+    private var sortArrow: some View {
+        Image(systemName: sortState.ascending ? "chevron.up" : "chevron.down")
+            .font(.system(size: 7.5, weight: .black))
+            .foregroundStyle(EchoTheme.neoMint)
+    }
+}
+
 @MainActor
 private func trackTableHeader(showAlbum: Bool, isPlaylist: Bool = false) -> some View {
     HStack(spacing: 12) {
@@ -1139,14 +1887,18 @@ private func trackTableHeader(showAlbum: Bool, isPlaylist: Bool = false) -> some
             .frame(minWidth: 180, maxWidth: .infinity, alignment: .leading)
         if showAlbum {
             Text("ALBUM")
-                .frame(width: 170, alignment: .leading)
+                .frame(width: 150, alignment: .leading)
         }
+        Text("PLAYS")
+            .frame(width: 44, alignment: .trailing)
+        Text("POP")
+            .frame(width: 50, alignment: .trailing)
         Text("FORMAT")
-            .frame(width: 124, alignment: .trailing)
-        Text(isPlaylist ? "MOVE" : "ADD")
-            .frame(width: 34)
-        Text("SYNC")
-            .frame(width: 68, alignment: .trailing)
+            .frame(width: 86, alignment: .center)
+        Text(isPlaylist ? "MOVE" : "P")
+            .frame(width: 30)
+        Text("S")
+            .frame(width: 30)
         Image(systemName: "clock")
             .frame(width: 44, alignment: .trailing)
         Color.clear.frame(width: 24, height: 1)
