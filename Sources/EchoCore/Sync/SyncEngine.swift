@@ -431,7 +431,10 @@ public enum SyncPlanner {
                 episodesUpToDate.append(.init(episode: ep, relativeDestinationPath: relPath, needsDownloadFirst: false))
             } else {
                 episodesToCopy.append(.init(episode: ep, relativeDestinationPath: relPath, needsDownloadFirst: !ep.isDownloaded))
-                bytesToWrite += max(ep.fileSize, 0)
+                let estimatedSize: Int64 = ep.fileSize > 0
+                    ? ep.fileSize
+                    : (ep.duration > 0 ? Int64(ep.duration * 16_000) : 0)
+                bytesToWrite += estimatedSize
             }
         }
 

@@ -128,6 +128,8 @@ public struct WirelessSyncManifest: Codable, Sendable {
     public var playlists: [WirelessSyncPlaylist]
     public var episodes: [WirelessSyncEpisode]
     public var podcastFeeds: [WirelessSyncPodcastFeed]
+    public var albumEditorial: [AlbumEditorialInfo]
+    public var artistEditorial: [ArtistEditorialInfo]
 
     public init(
         deviceID: String,
@@ -139,7 +141,9 @@ public struct WirelessSyncManifest: Codable, Sendable {
         tracks: [WirelessSyncTrack],
         playlists: [WirelessSyncPlaylist],
         episodes: [WirelessSyncEpisode],
-        podcastFeeds: [WirelessSyncPodcastFeed] = []
+        podcastFeeds: [WirelessSyncPodcastFeed] = [],
+        albumEditorial: [AlbumEditorialInfo] = [],
+        artistEditorial: [ArtistEditorialInfo] = []
     ) {
         self.deviceID = deviceID
         self.deviceName = deviceName
@@ -151,6 +155,8 @@ public struct WirelessSyncManifest: Codable, Sendable {
         self.playlists = playlists
         self.episodes = episodes
         self.podcastFeeds = podcastFeeds
+        self.albumEditorial = albumEditorial
+        self.artistEditorial = artistEditorial
     }
 }
 
@@ -361,13 +367,274 @@ public struct WirelessPodcastSubscribeResponse: Codable, Sendable {
     }
 }
 
+// MARK: - Apple TV / Full LAN Catalog & Mac Remote Control Payloads
+
+public struct WirelessPartyStatus: Codable, Hashable, Sendable {
+    public var isLive: Bool
+    public var port: Int?
+    public var lanIP: String?
+    public var joinURL: String?
+    public var playlistName: String
+
+    public init(
+        isLive: Bool = false,
+        port: Int? = nil,
+        lanIP: String? = nil,
+        joinURL: String? = nil,
+        playlistName: String = "Partymode"
+    ) {
+        self.isLive = isLive
+        self.port = port
+        self.lanIP = lanIP
+        self.joinURL = joinURL
+        self.playlistName = playlistName
+    }
+}
+
+public struct WirelessFullCatalogPayload: Codable, Sendable {
+    public var serverName: String
+    public var catalogVersion: String
+    public var generatedAt: Date
+    public var tracks: [WirelessSyncTrack]
+    public var playlists: [WirelessSyncPlaylist]
+    public var podcastFeeds: [WirelessSyncPodcastFeed]
+    public var episodes: [WirelessSyncEpisode]
+    public var albumEditorial: [AlbumEditorialInfo]
+    public var artistEditorial: [ArtistEditorialInfo]
+    public var partyStatus: WirelessPartyStatus
+
+    public init(
+        serverName: String,
+        catalogVersion: String,
+        generatedAt: Date = Date(),
+        tracks: [WirelessSyncTrack],
+        playlists: [WirelessSyncPlaylist],
+        podcastFeeds: [WirelessSyncPodcastFeed],
+        episodes: [WirelessSyncEpisode],
+        albumEditorial: [AlbumEditorialInfo] = [],
+        artistEditorial: [ArtistEditorialInfo] = [],
+        partyStatus: WirelessPartyStatus = WirelessPartyStatus()
+    ) {
+        self.serverName = serverName
+        self.catalogVersion = catalogVersion
+        self.generatedAt = generatedAt
+        self.tracks = tracks
+        self.playlists = playlists
+        self.podcastFeeds = podcastFeeds
+        self.episodes = episodes
+        self.albumEditorial = albumEditorial
+        self.artistEditorial = artistEditorial
+        self.partyStatus = partyStatus
+    }
+}
+
+public struct WirelessRemotePlaybackState: Codable, Sendable {
+    public var serverName: String
+    public var isPlaying: Bool
+    public var currentTrack: WirelessSyncTrack?
+    public var currentTime: TimeInterval
+    public var duration: TimeInterval
+    public var volume: Double
+    public var isMuted: Bool
+    public var isShuffled: Bool
+    public var repeatMode: String
+    public var currentIndex: Int
+    public var queue: [WirelessSyncTrack]
+    public var outputDeviceName: String
+    public var partyStatus: WirelessPartyStatus
+
+    public init(
+        serverName: String,
+        isPlaying: Bool = false,
+        currentTrack: WirelessSyncTrack? = nil,
+        currentTime: TimeInterval = 0,
+        duration: TimeInterval = 0,
+        volume: Double = 0.85,
+        isMuted: Bool = false,
+        isShuffled: Bool = false,
+        repeatMode: String = "off",
+        currentIndex: Int = 0,
+        queue: [WirelessSyncTrack] = [],
+        outputDeviceName: String = "System Default",
+        partyStatus: WirelessPartyStatus = WirelessPartyStatus()
+    ) {
+        self.serverName = serverName
+        self.isPlaying = isPlaying
+        self.currentTrack = currentTrack
+        self.currentTime = currentTime
+        self.duration = duration
+        self.volume = volume
+        self.isMuted = isMuted
+        self.isShuffled = isShuffled
+        self.repeatMode = repeatMode
+        self.currentIndex = currentIndex
+        self.queue = queue
+        self.outputDeviceName = outputDeviceName
+        self.partyStatus = partyStatus
+    }
+}
+
+public struct WirelessRemoteCommandRequest: Codable, Sendable {
+    public var action: String
+    public var seconds: Double?
+    public var volume: Double?
+    public var queueIndex: Int?
+    public var trackID: String?
+    public var albumKey: String?
+    public var playlistID: String?
+
+    public init(
+        action: String,
+        seconds: Double? = nil,
+        volume: Double? = nil,
+        queueIndex: Int? = nil,
+        trackID: String? = nil,
+        albumKey: String? = nil,
+        playlistID: String? = nil
+    ) {
+        self.action = action
+        self.seconds = seconds
+        self.volume = volume
+        self.queueIndex = queueIndex
+        self.trackID = trackID
+        self.albumKey = albumKey
+        self.playlistID = playlistID
+    }
+}
+
+public struct WirelessRemoteCommandResponse: Codable, Sendable {
+    public var ok: Bool
+    public var message: String?
+    public var state: WirelessRemotePlaybackState?
+
+    public init(ok: Bool, message: String? = nil, state: WirelessRemotePlaybackState? = nil) {
+        self.ok = ok
+        self.message = message
+        self.state = state
+    }
+}
+
+public struct WirelessPartyEnvelope: Codable, Sendable {
+    public var status: WirelessPartyStatus
+    public var state: PartyPlaylistState?
+
+    public init(status: WirelessPartyStatus, state: PartyPlaylistState? = nil) {
+        self.status = status
+        self.state = state
+    }
+}
+
 public struct WirelessLibraryCatalog: Sendable {
+    public var serverName: String
     public var tracks: [Track]
     public var albums: [AlbumGroup]
+    public var playlists: [Playlist]
+    public var podcasts: [PodcastShow]
+    public var albumEditorial: [AlbumEditorialInfo]
+    public var artistEditorial: [ArtistEditorialInfo]
+    public var trackFilePaths: [String: String]
+    public var episodeFilePaths: [String: String]
+    public var albumArtistByTrackID: [String: String]
 
-    public init(tracks: [Track] = [], albums: [AlbumGroup] = []) {
+    public init(
+        tracks: [Track] = [],
+        albums: [AlbumGroup] = [],
+        playlists: [Playlist] = [],
+        podcasts: [PodcastShow] = [],
+        albumEditorial: [AlbumEditorialInfo] = [],
+        artistEditorial: [ArtistEditorialInfo] = [],
+        serverName: String = Host.current().localizedName ?? "My Echo Mac"
+    ) {
+        self.serverName = serverName
         self.tracks = tracks
         self.albums = albums
+        self.playlists = playlists
+        self.podcasts = podcasts
+        self.albumEditorial = albumEditorial
+        self.artistEditorial = artistEditorial
+
+        var tPaths: [String: String] = [:]
+        tPaths.reserveCapacity(tracks.count)
+        for t in tracks where t.isAvailable {
+            tPaths[t.id] = t.filePath
+        }
+        self.trackFilePaths = tPaths
+
+        var ePaths: [String: String] = [:]
+        for show in podcasts {
+            for ep in show.episodes {
+                if let p = ep.localFilePath, !p.isEmpty {
+                    ePaths[ep.id] = p
+                }
+            }
+        }
+        self.episodeFilePaths = ePaths
+
+        var aaMap: [String: String] = [:]
+        for alb in albums {
+            for t in alb.tracks {
+                aaMap[t.id] = alb.artist
+            }
+        }
+        self.albumArtistByTrackID = aaMap
+    }
+
+    public func buildFullCatalog(partyStatus: WirelessPartyStatus) -> WirelessFullCatalogPayload {
+        let availableTracks = tracks.filter(\.isAvailable)
+        let allowedIDs = Set(availableTracks.map(\.id))
+        let wireTracks = availableTracks.map {
+            WirelessSyncTrack(from: $0, resolvedAlbumArtist: albumArtistByTrackID[$0.id])
+        }
+        let wirePlaylists = playlists.map {
+            WirelessSyncPlaylist(from: $0, allowedTrackIDs: allowedIDs)
+        }
+        let wireFeeds = podcasts
+            .filter { !$0.isSingleEpisodesBucket || !$0.episodes.isEmpty }
+            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+            .map { show -> WirelessSyncPodcastFeed in
+                var feed = WirelessSyncPodcastFeed(from: show, isSelectedForAutoSync: true)
+                if show.isSingleEpisodesBucket {
+                    feed.feedURL = ""
+                }
+                return feed
+            }
+        let wireEpisodes = podcasts
+            .flatMap(\.episodes)
+            .sorted { ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast) }
+            .prefix(500)
+            .map { WirelessSyncEpisode(from: $0) }
+
+        var normalizedAlbumEd: [AlbumEditorialInfo] = []
+        var seenEdKeys = Set<String>()
+        for info in albumEditorial where info.hasDisplayableContent {
+            let key = info.albumKey.lowercased()
+            if seenEdKeys.insert(key).inserted {
+                var copy = info
+                copy.albumKey = key
+                normalizedAlbumEd.append(copy)
+            }
+        }
+
+        let version = WirelessDeviceSnapshot.computeManifestVersion(
+            syncMode: "catalog",
+            tracks: wireTracks,
+            playlists: wirePlaylists,
+            episodes: Array(wireEpisodes),
+            podcastFeeds: wireFeeds
+        )
+
+        return WirelessFullCatalogPayload(
+            serverName: serverName,
+            catalogVersion: version,
+            generatedAt: Date(),
+            tracks: wireTracks,
+            playlists: wirePlaylists,
+            podcastFeeds: wireFeeds,
+            episodes: Array(wireEpisodes),
+            albumEditorial: normalizedAlbumEd,
+            artistEditorial: artistEditorial.filter(\.hasDisplayableContent),
+            partyStatus: partyStatus
+        )
     }
 
     public func search(query: String, syncedTrackIDs: Set<String>, limit: Int = 30) -> WirelessLibrarySearchResponse {
@@ -436,7 +703,9 @@ public struct WirelessDeviceSnapshot: Sendable {
         playlists: [Playlist],
         podcasts: [PodcastShow],
         serverName: String,
-        precomputedAlbumByTrackID: [String: AlbumGroup]? = nil
+        precomputedAlbumByTrackID: [String: AlbumGroup]? = nil,
+        albumEditorialByKey: [String: AlbumEditorialInfo] = [:],
+        artistEditorialByKey: [String: ArtistEditorialInfo] = [:]
     ) {
         self.deviceID = device.id
         self.deviceName = device.name
@@ -500,12 +769,44 @@ public struct WirelessDeviceSnapshot: Sendable {
         self.episodeFilePaths = epPaths
         self.totalBytes = matchingTracks.reduce(0) { $0 + $1.fileSize } + matchingEpisodes.reduce(0) { $0 + $1.fileSize }
 
+        // Collect locally cached album & artist editorial info relevant to this device's synced tracks
+        var seenAlbumEditorialKeys = Set<String>()
+        var wireAlbumEditorial: [AlbumEditorialInfo] = []
+        var syncedArtistKeys = Set<String>()
+        for t in matchingTracks {
+            let resolvedAlbum = albumByTrackID[t.id]
+            let macAlbumKey = resolvedAlbum?.id ?? t.albumKey
+            let iosAlbumKey = t.effectiveAlbum.lowercased()
+            if let info = albumEditorialByKey[macAlbumKey] ?? albumEditorialByKey[iosAlbumKey],
+               info.hasDisplayableContent,
+               seenAlbumEditorialKeys.insert(iosAlbumKey).inserted {
+                var copy = info
+                copy.albumKey = iosAlbumKey
+                wireAlbumEditorial.append(copy)
+            }
+            let artistCandidate = resolvedAlbum?.artist ?? t.effectiveArtist
+            for name in ArtistNameParser.artistNames(artistCandidate) {
+                syncedArtistKeys.insert(name.lowercased())
+            }
+            for name in ArtistNameParser.artistNames(t.artist) {
+                syncedArtistKeys.insert(name.lowercased())
+            }
+        }
+        wireAlbumEditorial.sort { $0.albumKey < $1.albumKey }
+
+        let wireArtistEditorial: [ArtistEditorialInfo] = syncedArtistKeys
+            .compactMap { artistEditorialByKey[$0] }
+            .filter { $0.hasDisplayableContent }
+            .sorted { $0.artistKey < $1.artistKey }
+
         let version = Self.computeManifestVersion(
             syncMode: device.syncMode.rawValue,
             tracks: wireTracks,
             playlists: wirePlaylists,
             episodes: wireEpisodes,
-            podcastFeeds: wireFeeds
+            podcastFeeds: wireFeeds,
+            albumEditorial: wireAlbumEditorial,
+            artistEditorial: wireArtistEditorial
         )
 
         self.manifest = WirelessSyncManifest(
@@ -518,7 +819,9 @@ public struct WirelessDeviceSnapshot: Sendable {
             tracks: wireTracks,
             playlists: wirePlaylists,
             episodes: wireEpisodes,
-            podcastFeeds: wireFeeds
+            podcastFeeds: wireFeeds,
+            albumEditorial: wireAlbumEditorial,
+            artistEditorial: wireArtistEditorial
         )
     }
 
@@ -527,13 +830,17 @@ public struct WirelessDeviceSnapshot: Sendable {
         tracks: [WirelessSyncTrack],
         playlists: [WirelessSyncPlaylist],
         episodes: [WirelessSyncEpisode],
-        podcastFeeds: [WirelessSyncPodcastFeed] = []
+        podcastFeeds: [WirelessSyncPodcastFeed] = [],
+        albumEditorial: [AlbumEditorialInfo] = [],
+        artistEditorial: [ArtistEditorialInfo] = []
     ) -> String {
         var parts: [String] = ["mode:\(syncMode)"]
         parts.append(contentsOf: tracks.map { "t:\($0.id):\($0.fileSize):\(Int($0.modifiedAt.timeIntervalSince1970))" })
         parts.append(contentsOf: playlists.map { "p:\($0.id):\($0.name):\($0.trackIDs.joined(separator: ","))" })
         parts.append(contentsOf: episodes.map { "e:\($0.id):\($0.fileSize)" })
         parts.append(contentsOf: podcastFeeds.map { "f:\($0.id):\($0.feedURL):\($0.episodesToKeep):\($0.isSelectedForAutoSync ? 1 : 0)" })
+        parts.append(contentsOf: albumEditorial.map { "ae:\($0.albumKey):\(Int($0.fetchedAt.timeIntervalSince1970))" })
+        parts.append(contentsOf: artistEditorial.map { "are:\($0.artistKey):\(Int($0.fetchedAt.timeIntervalSince1970))" })
         let joined = parts.joined(separator: "|")
         let digest = SHA256.hash(data: Data(joined.utf8))
         return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
@@ -551,6 +858,7 @@ public final class WirelessSyncServer: @unchecked Sendable {
     private var listener: NWListener?
     private var snapshotsByDeviceID: [UUID: WirelessDeviceSnapshot] = [:]
     private var primaryDeviceID: UUID?
+    private var companionToken: String?
     private var libraryCatalog = WirelessLibraryCatalog()
     private let lock = NSLock()
 
@@ -562,6 +870,9 @@ public final class WirelessSyncServer: @unchecked Sendable {
     public var onLidarrSearch: (@Sendable (String) async -> WirelessLidarrSearchResponse)?
     public var onLidarrOrder: (@Sendable (WirelessLidarrOrderRequest) async -> WirelessLidarrOrderResponse)?
     public var onPodcastSubscribe: (@Sendable (UUID, WirelessPodcastSubscribeRequest) async -> WirelessPodcastSubscribeResponse)?
+    public var onFetchRemoteState: (@Sendable () async -> WirelessRemotePlaybackState)?
+    public var onRemoteCommand: (@Sendable (WirelessRemoteCommandRequest) async -> WirelessRemoteCommandResponse)?
+    public var onFetchPartyState: (@Sendable () async -> WirelessPartyEnvelope)?
 
     private let encoder: JSONEncoder = {
         let e = JSONEncoder()
@@ -579,9 +890,31 @@ public final class WirelessSyncServer: @unchecked Sendable {
         self.artworkCache = artworkCache
     }
 
-    public func updateLibraryCatalog(tracks: [Track], albums: [AlbumGroup]) {
+    public func setCompanionToken(_ token: String?) {
         lock.lock()
-        libraryCatalog = WirelessLibraryCatalog(tracks: tracks, albums: albums)
+        companionToken = token?.trimmingCharacters(in: .whitespacesAndNewlines)
+        lock.unlock()
+    }
+
+    public func updateLibraryCatalog(
+        tracks: [Track],
+        albums: [AlbumGroup],
+        playlists: [Playlist] = [],
+        podcasts: [PodcastShow] = [],
+        albumEditorial: [AlbumEditorialInfo] = [],
+        artistEditorial: [ArtistEditorialInfo] = [],
+        serverName: String = Host.current().localizedName ?? "My Echo Mac"
+    ) {
+        lock.lock()
+        libraryCatalog = WirelessLibraryCatalog(
+            tracks: tracks,
+            albums: albums,
+            playlists: playlists,
+            podcasts: podcasts,
+            albumEditorial: albumEditorial,
+            artistEditorial: artistEditorial,
+            serverName: serverName
+        )
         lock.unlock()
     }
 

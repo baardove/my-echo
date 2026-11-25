@@ -57,7 +57,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<'EOF'
     <string>My Echo advertises its local Wi-Fi Auto-Sync server via Bonjour so the My Echo iPhone and iPad app can pair and sync automatically.</string>
     <key>NSBonjourServices</key>
     <array>
-        <string>_myecho._tcp</string>
+        <string>_myecho-sync._tcp</string>
     </array>
     <key>NSDesktopFolderUsageDescription</key>
     <string>My Echo can read music libraries or export files from your Desktop folder when selected.</string>
