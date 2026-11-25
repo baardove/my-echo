@@ -53,4 +53,3 @@ targets:
           - _myecho-sync._tcp
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
-          NSAllowsLocalNetworking: true

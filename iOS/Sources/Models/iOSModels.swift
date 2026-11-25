@@ -160,6 +160,41 @@ struct iOSPodcastShow: Identifiable, Codable, Hashable, Sendable {
     var episodes: [iOSPodcastEpisode]
 }
 
+struct SyncedAlbumEditorial: Identifiable, Codable, Hashable, Sendable {
+    var albumKey: String
+    var releaseDate: String?
+    var label: String?
+    var genres: [String]
+    var albumFans: Int?
+    var artistFans: Int?
+    var artistAlbumCount: Int?
+    var albumSummary: String?
+    var artistSummary: String?
+    var artistImageURL: String?
+    var fetchedAt: Date
+
+    var id: String { albumKey }
+
+    var hasDisplayableContent: Bool {
+        albumSummary != nil || artistSummary != nil || label != nil || releaseDate != nil || !genres.isEmpty || albumFans != nil || artistFans != nil
+    }
+}
+
+struct SyncedArtistEditorial: Identifiable, Codable, Hashable, Sendable {
+    var artistKey: String
+    var summary: String?
+    var fans: Int?
+    var albumCount: Int?
+    var imageURL: String?
+    var fetchedAt: Date
+
+    var id: String { artistKey }
+
+    var hasDisplayableContent: Bool {
+        summary != nil || fans != nil || albumCount != nil
+    }
+}
+
 struct SyncManifestPayload: Codable, Sendable {
     var deviceID: String
     var deviceName: String
@@ -171,6 +206,8 @@ struct SyncManifestPayload: Codable, Sendable {
     var playlists: [SyncedPlaylist]
     var episodes: [SyncedEpisode]
     var podcastFeeds: [SyncedPodcastFeed]
+    var albumEditorial: [SyncedAlbumEditorial]
+    var artistEditorial: [SyncedArtistEditorial]
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -184,6 +221,8 @@ struct SyncManifestPayload: Codable, Sendable {
         playlists = try c.decodeIfPresent([SyncedPlaylist].self, forKey: .playlists) ?? []
         episodes = try c.decodeIfPresent([SyncedEpisode].self, forKey: .episodes) ?? []
         podcastFeeds = try c.decodeIfPresent([SyncedPodcastFeed].self, forKey: .podcastFeeds) ?? []
+        albumEditorial = try c.decodeIfPresent([SyncedAlbumEditorial].self, forKey: .albumEditorial) ?? []
+        artistEditorial = try c.decodeIfPresent([SyncedArtistEditorial].self, forKey: .artistEditorial) ?? []
     }
 }
 

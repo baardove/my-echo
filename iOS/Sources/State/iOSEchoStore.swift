@@ -21,6 +21,9 @@ final class iOSEchoStore {
     var albums: [SyncedAlbumGroup] = []
     var playlists: [SyncedPlaylist] = []
     var episodes: [SyncedEpisode] = []
+    var albumEditorialByKey: [String: SyncedAlbumEditorial] = [:]
+    var artistEditorialByKey: [String: SyncedArtistEditorial] = [:]
+    var fetchingEditorialKeys: Set<String> = []
     var localStorageBytes: Int64 = 0
 
     // Standalone Podcasts State (Synced Feeds + Mac-Synced Episodes + Device RSS Downloads)
@@ -434,6 +437,18 @@ final class iOSEchoStore {
         playlists = manifest?.playlists ?? []
         episodes = manifest?.episodes ?? []
 
+        // Hydrate synced album & artist editorial info from Mac manifest (preserving any locally cached device entries)
+        loadDeviceEditorialCacheIfNeeded()
+        if let manifest {
+            for item in manifest.albumEditorial {
+                albumEditorialByKey[item.albumKey.lowercased()] = item
+            }
+            for item in manifest.artistEditorial {
+                artistEditorialByKey[item.artistKey.lowercased()] = item
+            }
+            saveDeviceEditorialCache()
+        }
+
         if let manifest {
             let pendingFeeds = Set(pendingMacPodcastSubscriptions.map { Self.normalizedFeedURL($0.feedURL) })
             podcastShows = await podcastManager.mergeFromMacManifest(
@@ -461,6 +476,198 @@ final class iOSEchoStore {
             )
         }
         .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+    }
+
+    // MARK: - Album & Artist Editorial Info (Synced from Mac + Local Cache + Online Fallback)
+
+    private static var editorialCacheFileURL: URL {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("MyEchoiOS", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("editorial-cache.json")
+    }
+
+    private struct EditorialCacheFile: Codable {
+        var albums: [String: SyncedAlbumEditorial]
+        var artists: [String: SyncedArtistEditorial]
+    }
+
+    private var loadedEditorialCacheOnce = false
+
+    private func loadDeviceEditorialCacheIfNeeded() {
+        guard !loadedEditorialCacheOnce else { return }
+        loadedEditorialCacheOnce = true
+        guard let data = try? Data(contentsOf: Self.editorialCacheFileURL) else { return }
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .secondsSince1970
+        if let decoded = try? dec.decode(EditorialCacheFile.self, from: data) {
+            albumEditorialByKey = decoded.albums
+            artistEditorialByKey = decoded.artists
+        }
+    }
+
+    private func saveDeviceEditorialCache() {
+        let payload = EditorialCacheFile(albums: albumEditorialByKey, artists: artistEditorialByKey)
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .secondsSince1970
+        if let data = try? enc.encode(payload) {
+            try? data.write(to: Self.editorialCacheFileURL, options: .atomic)
+        }
+    }
+
+    func albumEditorial(for albumTitle: String) -> SyncedAlbumEditorial? {
+        let key = albumTitle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return albumEditorialByKey[key]
+    }
+
+    func artistEditorial(for artistName: String) -> SyncedArtistEditorial? {
+        let key = artistName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return artistEditorialByKey[key]
+    }
+
+    func ensureEditorialLoaded(albumTitle: String, artist: String, force: Bool = false) async {
+        let albumKey = albumTitle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !albumKey.isEmpty else { return }
+        if !force, let cached = albumEditorialByKey[albumKey], cached.hasDisplayableContent,
+           Date().timeIntervalSince(cached.fetchedAt) < 14 * 24 * 60 * 60 {
+            return
+        }
+        guard !fetchingEditorialKeys.contains(albumKey) else { return }
+        fetchingEditorialKeys.insert(albumKey)
+        defer { fetchingEditorialKeys.remove(albumKey) }
+
+        let primaryArtist = artist
+            .components(separatedBy: CharacterSet(charactersIn: ",;&"))
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? artist
+        let isVarious = primaryArtist.lowercased() == "various artists" || primaryArtist.lowercased() == "unknown artist"
+
+        async let dz = fetchDeezerEditorial(artist: isVarious ? "" : primaryArtist, album: albumTitle)
+        async let albumWiki = fetchWikipediaExtract(
+            candidates: ["\(albumTitle) (\(primaryArtist) album)", "\(albumTitle) (album)", albumTitle],
+            artistHint: isVarious ? nil : primaryArtist
+        )
+        async let artistWiki: String? = isVarious
+            ? nil
+            : fetchWikipediaExtract(
+                candidates: ["\(primaryArtist) (band)", "\(primaryArtist) (musician)", "\(primaryArtist) (singer)", primaryArtist],
+                artistHint: nil
+            )
+
+        let dzInfo = await dz
+        let aSum = await albumWiki
+        let arSum = await artistWiki
+        let now = Date()
+
+        let info = SyncedAlbumEditorial(
+            albumKey: albumKey,
+            releaseDate: dzInfo.releaseDate,
+            label: dzInfo.label,
+            genres: dzInfo.genres,
+            albumFans: dzInfo.albumFans,
+            artistFans: dzInfo.artistFans,
+            artistAlbumCount: dzInfo.artistAlbumCount,
+            albumSummary: aSum,
+            artistSummary: arSum,
+            artistImageURL: dzInfo.artistImageURL,
+            fetchedAt: now
+        )
+        albumEditorialByKey[albumKey] = info
+        if !isVarious {
+            let arKey = primaryArtist.lowercased()
+            artistEditorialByKey[arKey] = SyncedArtistEditorial(
+                artistKey: arKey,
+                summary: arSum,
+                fans: dzInfo.artistFans,
+                albumCount: dzInfo.artistAlbumCount,
+                imageURL: dzInfo.artistImageURL,
+                fetchedAt: now
+            )
+        }
+        saveDeviceEditorialCache()
+    }
+
+    private struct DeezerFetchedInfo {
+        var releaseDate: String?
+        var label: String?
+        var genres: [String] = []
+        var albumFans: Int?
+        var artistFans: Int?
+        var artistAlbumCount: Int?
+        var artistImageURL: String?
+    }
+
+    private func fetchDeezerEditorial(artist: String, album: String) async -> DeezerFetchedInfo {
+        var out = DeezerFetchedInfo()
+        let q = artist.isEmpty ? album : "\(artist) \(album)"
+        guard let encoded = q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://api.deezer.com/search/album?q=\(encoded)&limit=5") else { return out }
+        var req = URLRequest(url: url, timeoutInterval: 8)
+        req.setValue("MyEchoiOS/1.3", forHTTPHeaderField: "User-Agent")
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = json["data"] as? [[String: Any]],
+              let match = list.first,
+              let albumID = match["id"] as? Int,
+              let detailURL = URL(string: "https://api.deezer.com/album/\(albumID)") else { return out }
+
+        var dReq = URLRequest(url: detailURL, timeoutInterval: 8)
+        dReq.setValue("MyEchoiOS/1.3", forHTTPHeaderField: "User-Agent")
+        if let (dData, dResp) = try? await URLSession.shared.data(for: dReq),
+           (dResp as? HTTPURLResponse)?.statusCode == 200,
+           let detail = try? JSONSerialization.jsonObject(with: dData) as? [String: Any] {
+            if let rd = detail["release_date"] as? String, !rd.isEmpty, rd != "0000-00-00" { out.releaseDate = rd }
+            if let lbl = detail["label"] as? String, !lbl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { out.label = lbl }
+            if let fans = detail["fans"] as? Int, fans > 0 { out.albumFans = fans }
+            if let gObj = detail["genres"] as? [String: Any], let gArr = gObj["data"] as? [[String: Any]] {
+                out.genres = gArr.compactMap { $0["name"] as? String }.filter { !$0.isEmpty }
+            }
+            if let aObj = detail["artist"] as? [String: Any], let aID = aObj["id"] as? Int {
+                out.artistImageURL = aObj["picture_medium"] as? String
+                if let aURL = URL(string: "https://api.deezer.com/artist/\(aID)") {
+                    var aReq = URLRequest(url: aURL, timeoutInterval: 8)
+                    aReq.setValue("MyEchoiOS/1.3", forHTTPHeaderField: "User-Agent")
+                    if let (aData, aResp) = try? await URLSession.shared.data(for: aReq),
+                       (aResp as? HTTPURLResponse)?.statusCode == 200,
+                       let aDetail = try? JSONSerialization.jsonObject(with: aData) as? [String: Any] {
+                        if let f = aDetail["nb_fan"] as? Int, f > 0 { out.artistFans = f }
+                        if let c = aDetail["nb_album"] as? Int, c > 0 { out.artistAlbumCount = c }
+                    }
+                }
+            }
+        }
+        return out
+    }
+
+    private func fetchWikipediaExtract(candidates: [String], artistHint: String?) async -> String? {
+        let keywords = ["album", "band", "singer", "musician", "music", "song", "record", "electronic", "rock", "pop", "hip hop", "jazz", "composer", "dj", "duo", "group", "rapper", "producer", "studio"]
+        let normArtist = artistHint?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        for raw in candidates {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let slug = trimmed.replacingOccurrences(of: " ", with: "_")
+            guard let enc = slug.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+                  let url = URL(string: "https://en.wikipedia.org/api/rest_v1/page/summary/\(enc)") else { continue }
+            var req = URLRequest(url: url, timeoutInterval: 6)
+            req.setValue("MyEchoiOS/1.3", forHTTPHeaderField: "User-Agent")
+            guard let (data, resp) = try? await URLSession.shared.data(for: req),
+                  (resp as? HTTPURLResponse)?.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  (json["type"] as? String) != "disambiguation",
+                  let extract = json["extract"] as? String else { continue }
+            let clean = extract.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard clean.count >= 40 else { continue }
+            let lower = clean.lowercased()
+            guard keywords.contains(where: { lower.contains($0) }) else { continue }
+            if let normArtist, !normArtist.isEmpty,
+               !trimmed.lowercased().contains(normArtist) && !lower.contains(normArtist) {
+                continue
+            }
+            return clean
+        }
+        return nil
     }
 
     // MARK: - Standalone Podcast RSS Refresh & Deduplicated Direct Downloads

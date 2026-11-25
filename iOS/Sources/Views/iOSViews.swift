@@ -795,9 +795,21 @@ struct OfflineLibraryTab: View {
 struct OfflineAlbumDetailView: View {
     @Environment(iOSEchoStore.self) private var store
     let album: SyncedAlbumGroup
+    @State private var showLightbox = false
 
     private var totalDuration: TimeInterval {
         album.tracks.reduce(0) { $0 + $1.duration }
+    }
+
+    private var albumEditorial: SyncedAlbumEditorial? {
+        store.albumEditorial(for: album.title)
+    }
+
+    private var audioQualitySummary: String {
+        let formats = Array(Set(album.tracks.map(\.formatPrimaryLabel))).sorted()
+        let detail = album.tracks.compactMap(\.formatDetailLabel).first
+        if let detail { return "\(formats.joined(separator: "/")) · \(detail)" }
+        return formats.joined(separator: "/")
     }
 
     var body: some View {
@@ -817,11 +829,26 @@ struct OfflineAlbumDetailView: View {
                     )
 
                     HStack(spacing: 16) {
-                        LocalArtworkImage(url: store.artworkFileURL(for: album.artworkHash))
-                            .frame(width: 118, height: 118)
-                            .clipShape(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusCard))
-                            .overlay(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusCard).strokeBorder(EchoiOSTheme.borderStrong, lineWidth: 1))
-                            .shadow(color: .black.opacity(0.45), radius: 10, y: 4)
+                        Button {
+                            showLightbox = true
+                        } label: {
+                            ZStack(alignment: .bottomTrailing) {
+                                LocalArtworkImage(url: store.artworkFileURL(for: album.artworkHash))
+                                    .frame(width: 118, height: 118)
+                                    .clipShape(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusCard))
+                                    .overlay(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusCard).strokeBorder(EchoiOSTheme.neoMint.opacity(0.45), lineWidth: 1))
+                                    .shadow(color: .black.opacity(0.45), radius: 10, y: 4)
+
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(EchoiOSTheme.neoMint)
+                                    .frame(width: 22, height: 22)
+                                    .background(Color.black.opacity(0.72))
+                                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                                    .padding(5)
+                            }
+                        }
+                        .buttonStyle(.plain)
 
                         VStack(alignment: .leading, spacing: 6) {
                             Text("OFFLINE HI-FI ALBUM")
@@ -881,6 +908,46 @@ struct OfflineAlbumDetailView: View {
                 }
                 .padding(.horizontal, 16)
 
+                // Compact synced Album & Artist Notes teaser (tap to open full Lightbox)
+                if let info = albumEditorial, info.hasDisplayableContent {
+                    Button {
+                        showLightbox = true
+                    } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 6) {
+                                Text("ALBUM & ARTIST NOTES")
+                                    .font(.system(size: 9.5, weight: .black, design: .monospaced))
+                                    .tracking(1.0)
+                                    .foregroundStyle(EchoiOSTheme.neoMint)
+                                Spacer()
+                                if let label = info.label {
+                                    Text(label)
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundStyle(EchoiOSTheme.textMuted)
+                                        .lineLimit(1)
+                                }
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(EchoiOSTheme.neoMint)
+                            }
+                            if let summary = info.albumSummary ?? info.artistSummary {
+                                Text(summary)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(EchoiOSTheme.textSecondary)
+                                    .lineLimit(3)
+                                    .multilineTextAlignment(.leading)
+                            }
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(EchoiOSTheme.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusCard))
+                        .overlay(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusCard).strokeBorder(EchoiOSTheme.neoMint.opacity(0.32), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 16)
+                }
+
                 // Framed Studio Track Deck
                 VStack(spacing: 0) {
                     TrackListColumnHeader(leadingLabel: "#", showFormat: true)
@@ -922,6 +989,19 @@ struct OfflineAlbumDetailView: View {
         }
         .background(EchoiOSTheme.canvas)
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showLightbox) {
+            iOSAlbumLightboxSheet(
+                albumTitle: album.title,
+                artistName: album.artist,
+                year: album.year,
+                trackCount: album.tracks.count,
+                totalDuration: totalDuration,
+                audioQuality: audioQualitySummary,
+                localArtworkURL: store.artworkFileURL(for: album.artworkHash),
+                remoteArtworkURL: nil
+            )
+            .environment(store)
+        }
     }
 }
 
@@ -2061,13 +2141,13 @@ struct PodcastShowDetailView: View {
                         VStack(spacing: 0) {
                             HStack(spacing: 10) {
                                 Text("#")
-                                    .frame(width: 26, alignment: .center)
+                                    .frame(width: 34, alignment: .center)
                                 Text("EPISODE")
                                 Spacer()
                                 Text("STATUS")
-                                    .frame(width: 58, alignment: .center)
+                                    .frame(width: 56, alignment: .center)
                                 Text("TIME")
-                                    .frame(width: 44, alignment: .trailing)
+                                    .frame(width: 56, alignment: .trailing)
                             }
                             .font(.system(size: 9.5, weight: .bold, design: .monospaced))
                             .tracking(0.8)
@@ -2078,7 +2158,9 @@ struct PodcastShowDetailView: View {
 
                             Divider().overlay(EchoiOSTheme.border)
 
+                            let totalEpisodes = show.episodes.count
                             ForEach(Array(show.episodes.enumerated()), id: \.element.id) { idx, ep in
+                                let episodeNumber = totalEpisodes - idx
                                 let isCurrent = store.player.currentItem?.id == ep.id
                                 let isPlaying = isCurrent && store.player.isPlaying
                                 let rowAccent = ep.downloadOrigin != .none ? EchoiOSTheme.neoMint : EchoiOSTheme.neoCyan
@@ -2094,12 +2176,15 @@ struct PodcastShowDetailView: View {
                                                         .font(.system(size: 12, weight: .bold))
                                                         .foregroundStyle(rowAccent)
                                                 } else {
-                                                    Text(String(format: "%02d", idx + 1))
+                                                    Text(String(format: "%02d", episodeNumber))
                                                         .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                                                        .monospacedDigit()
                                                         .foregroundStyle(EchoiOSTheme.textMuted)
+                                                        .lineLimit(1)
+                                                        .minimumScaleFactor(0.85)
                                                 }
                                             }
-                                            .frame(width: 26, alignment: .center)
+                                            .frame(width: 34, alignment: .center)
 
                                             VStack(alignment: .leading, spacing: 2.5) {
                                                 Text(ep.title)
@@ -2184,13 +2269,14 @@ struct PodcastShowDetailView: View {
                                             .disabled(ep.audioURL.isEmpty)
                                         }
                                     }
-                                    .frame(width: 58, alignment: .center)
+                                    .frame(width: 56, alignment: .center)
 
                                     Text(ep.duration > 0 ? iOSFormatters.duration(ep.duration) : "—")
                                         .font(.system(size: 11.5, weight: .medium, design: .monospaced))
                                         .monospacedDigit()
+                                        .lineLimit(1)
                                         .foregroundStyle(isCurrent ? rowAccent.opacity(0.9) : EchoiOSTheme.textMuted)
-                                        .frame(width: 44, alignment: .trailing)
+                                        .frame(width: 56, alignment: .trailing)
                                 }
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 9.5)
@@ -3105,6 +3191,7 @@ struct NavidromeAlbumDetailView: View {
     let album: NavidromeAlbum
     @State private var songs: [NavidromeSong] = []
     @State private var isLoading = true
+    @State private var showLightbox = false
 
     private var totalDuration: TimeInterval {
         TimeInterval(songs.reduce(0) { $0 + $1.duration })
@@ -3123,11 +3210,26 @@ struct NavidromeAlbumDetailView: View {
                     .overlay(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusCard).strokeBorder(EchoiOSTheme.borderStrong, lineWidth: 1))
 
                     HStack(spacing: 16) {
-                        RemoteArtworkImage(url: NavidromeClient.coverArtURL(coverArtID: album.coverArt, size: 500, config: store.navidromeConfig))
-                            .frame(width: 116, height: 116)
-                            .clipShape(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusCard))
-                            .overlay(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusCard).strokeBorder(EchoiOSTheme.borderStrong, lineWidth: 1))
-                            .shadow(color: .black.opacity(0.45), radius: 10, y: 4)
+                        Button {
+                            showLightbox = true
+                        } label: {
+                            ZStack(alignment: .bottomTrailing) {
+                                RemoteArtworkImage(url: NavidromeClient.coverArtURL(coverArtID: album.coverArt, size: 500, config: store.navidromeConfig))
+                                    .frame(width: 116, height: 116)
+                                    .clipShape(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusCard))
+                                    .overlay(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusCard).strokeBorder(EchoiOSTheme.neoCyan.opacity(0.45), lineWidth: 1))
+                                    .shadow(color: .black.opacity(0.45), radius: 10, y: 4)
+
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(EchoiOSTheme.neoCyan)
+                                    .frame(width: 22, height: 22)
+                                    .background(Color.black.opacity(0.72))
+                                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                                    .padding(5)
+                            }
+                        }
+                        .buttonStyle(.plain)
 
                         VStack(alignment: .leading, spacing: 6) {
                             Text("NAVIDROME · STREAM")
@@ -3258,6 +3360,23 @@ struct NavidromeAlbumDetailView: View {
         }
         .background(EchoiOSTheme.canvas)
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showLightbox) {
+            let quality = songs.first.map { s in
+                let p = (s.suffix ?? "STREAM").uppercased()
+                return s.bitRate.map { "\(p) · \($0)k" } ?? p
+            }
+            iOSAlbumLightboxSheet(
+                albumTitle: album.name,
+                artistName: album.artist,
+                year: album.year,
+                trackCount: songs.isEmpty ? album.songCount : songs.count,
+                totalDuration: totalDuration > 0 ? totalDuration : nil,
+                audioQuality: quality,
+                localArtworkURL: nil,
+                remoteArtworkURL: NavidromeClient.coverArtURL(coverArtID: album.coverArt, size: 800, config: store.navidromeConfig)
+            )
+            .environment(store)
+        }
         .task {
             isLoading = true
             songs = (try? await store.navidromeClient.fetchAlbumSongs(albumID: album.id, config: store.navidromeConfig)) ?? []
@@ -3273,231 +3392,73 @@ struct SyncAndSettingsTab: View {
     @State private var ndURL = ""
     @State private var ndUser = ""
     @State private var ndPass = ""
+    @State private var showMacSettings = false
+    @State private var showNavidromeSettings = false
+    @State private var showSyncDetails = false
 
     var body: some View {
         @Bindable var bindable = store
         NavigationStack {
             Form {
-                // 1. Automatic Mac Wi-Fi Sync
-                Section("My Echo Mac · Automatic Wi-Fi Sync") {
-                    if !store.discoveredMacs.isEmpty {
-                        ForEach(store.discoveredMacs) { mac in
-                            Button {
-                                store.selectDiscoveredMac(mac)
-                            } label: {
-                                HStack {
-                                    Image(systemName: "desktopcomputer")
-                                        .foregroundStyle(EchoiOSTheme.neoMint)
-                                    VStack(alignment: .leading) {
-                                        Text(mac.name).foregroundStyle(EchoiOSTheme.textPrimary).font(.system(size: 14, weight: .bold))
-                                        Text(mac.baseURLString).font(.system(size: 11, design: .monospaced)).foregroundStyle(EchoiOSTheme.textMuted)
-                                    }
-                                    Spacer()
-                                    if store.macServerURL == mac.baseURLString {
-                                        Image(systemName: "checkmark.circle.fill").foregroundStyle(EchoiOSTheme.neoMint)
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    TextField("Mac Wi-Fi URL (e.g. http://192.168.0.50:48721)", text: $bindable.macServerURL)
-                        .keyboardType(.URL)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .onChange(of: store.macServerURL) { _, _ in store.saveWiFiSyncSettings() }
-
-                    TextField("Mac Tailscale Fallback (e.g. http://100.86.21.27:48721)", text: $bindable.macTailscaleURL)
-                        .keyboardType(.URL)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .onChange(of: store.macTailscaleURL) { _, _ in store.saveWiFiSyncSettings() }
-
-                    HStack(spacing: 8) {
-                        Button {
-                            store.macServerURL = iOSEchoStore.presetMacTailscaleURL
-                            store.macTailscaleURL = iOSEchoStore.presetMacTailscaleURL
-                            store.saveWiFiSyncSettings()
-                        } label: {
-                            Text("Preset: Mac Tailscale (100.86.21.27)")
-                                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
-                                .background(EchoiOSTheme.neoCyan.opacity(0.16))
-                                .foregroundStyle(EchoiOSTheme.neoCyan)
-                                .clipShape(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusSmall))
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    TextField("6-Digit Pairing PIN (from My Echo Mac)", text: $bindable.pairingPIN)
-                        .keyboardType(.numberPad)
-                        .onChange(of: store.pairingPIN) { _, newValue in
-                            store.saveWiFiSyncSettings()
-                            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if trimmed.count == 6 && !store.macServerURL.isEmpty && !store.isSyncing {
-                                Task { await store.syncNow() }
-                            }
-                        }
-
-                    Toggle("Auto-Sync on Home Wi-Fi", isOn: $bindable.autoSyncEnabled)
-                        .tint(EchoiOSTheme.neoMint)
-                        .onChange(of: store.autoSyncEnabled) { _, _ in store.saveWiFiSyncSettings() }
-
-                    Toggle("Auto-Download New Podcast Episodes on Refresh", isOn: $bindable.autoDownloadNewPodcasts)
-                        .tint(EchoiOSTheme.neoCyan)
-                        .onChange(of: store.autoDownloadNewPodcasts) { _, _ in store.saveWiFiSyncSettings() }
-
+                // 1. Primary Quick Controls: Manual Sync Now + Switches Only
+                Section {
                     if store.isSyncing {
                         VStack(alignment: .leading, spacing: 6) {
                             ProgressView(value: store.syncProgressFraction)
                                 .tint(EchoiOSTheme.neoMint)
                             Text("\(store.syncStatusText)\(store.syncCurrentItem.isEmpty ? "" : " · \(store.syncCurrentItem)")")
-                                .font(.system(size: 11.5))
+                                .font(.system(size: 12))
                                 .foregroundStyle(EchoiOSTheme.textSecondary)
                         }
+                        .padding(.vertical, 4)
                     } else {
                         Button {
                             Task { await store.syncNow() }
                         } label: {
-                            Label("Sync Now over Wi-Fi", systemImage: "arrow.triangle.2.circlepath")
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(EchoiOSTheme.neoMint)
+                            HStack(spacing: 8) {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                    .font(.system(size: 15, weight: .bold))
+                                Text("Sync Now")
+                                    .font(.system(size: 15, weight: .bold))
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 11)
+                            .background(EchoiOSTheme.neoMint.opacity(0.18))
+                            .foregroundStyle(EchoiOSTheme.neoMint)
+                            .clipShape(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusControl, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: EchoiOSTheme.radiusControl, style: .continuous)
+                                    .strokeBorder(EchoiOSTheme.neoMint.opacity(0.65), lineWidth: 1)
+                            )
                         }
-                    }
-
-                    HStack {
-                        Text("Status")
-                        Spacer()
-                        Text(store.syncStatusText)
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(store.syncError != nil ? EchoiOSTheme.dangerCoral : EchoiOSTheme.neoMint)
-                    }
-
-                    if let last = store.lastSyncedAt {
-                        HStack {
-                            Text("Last Synced")
-                            Spacer()
-                            Text(last.formatted(date: .abbreviated, time: .shortened))
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(EchoiOSTheme.textSecondary)
-                        }
+                        .buttonStyle(.plain)
+                        .listRowInsets(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
                     }
 
                     if let err = store.syncError {
-                        Text(err).font(.system(size: 12)).foregroundStyle(EchoiOSTheme.dangerCoral)
-                        if err.contains("Local Network"),
-                           let settingsURL = URL(string: UIApplication.openSettingsURLString) {
-                            Button("Open iPhone Settings (Local Network)") {
-                                UIApplication.shared.open(settingsURL)
-                            }
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(EchoiOSTheme.neoCyan)
-                        }
-                    }
-
-                    HStack {
-                        Text("Offline Storage Used")
-                        Spacer()
-                        Text(iOSFormatters.bytes(store.localStorageBytes))
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(EchoiOSTheme.neoCyan)
-                    }
-                }
-                .listRowBackground(EchoiOSTheme.surface)
-
-                // 2. Navidrome (Multiple Saved LAN / Tailscale Addresses)
-                Section("Navidrome Streaming (LAN & Tailscale)") {
-                    ForEach(store.navidromeConfig.savedAddresses) { addr in
-                        let isActive = store.navidromeConfig.serverURL
-                            .trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
-                            .lowercased() == addr.url.lowercased()
-                        HStack {
-                            Button {
-                                ndURL = addr.url
-                                store.switchNavidromeAddress(addr)
-                            } label: {
-                                HStack(spacing: 8) {
-                                    Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
-                                        .foregroundStyle(isActive ? EchoiOSTheme.neoCyan : EchoiOSTheme.textMuted)
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text(addr.label)
-                                            .font(.system(size: 13.5, weight: .bold))
-                                            .foregroundStyle(EchoiOSTheme.textPrimary)
-                                        Text(addr.url)
-                                            .font(.system(size: 11, design: .monospaced))
-                                            .foregroundStyle(EchoiOSTheme.textSecondary)
-                                    }
-                                    Spacer()
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(err)
+                                .font(.system(size: 12))
+                                .foregroundStyle(EchoiOSTheme.dangerCoral)
+                            if err.contains("Local Network"),
+                               let settingsURL = URL(string: UIApplication.openSettingsURLString) {
+                                Button("Open Settings (Local Network)") {
+                                    UIApplication.shared.open(settingsURL)
                                 }
-                            }
-                            .buttonStyle(.plain)
-
-                            if store.navidromeConfig.savedAddresses.count > 1 {
-                                Button {
-                                    store.removeNavidromeAddress(id: addr.id)
-                                    ndURL = store.navidromeConfig.serverURL
-                                } label: {
-                                    Image(systemName: "trash")
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(EchoiOSTheme.textMuted)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-
-                    TextField("Add / Edit Server URL (e.g. http://192.168.0.x:4533)", text: $ndURL)
-                        .keyboardType(.URL)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                    TextField("Username", text: $ndUser)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                    SecureField("Password", text: $ndPass)
-
-                    Picker("Streaming Quality", selection: Binding(
-                        get: { store.navidromeConfig.streamQuality },
-                        set: { q in
-                            var cfg = store.navidromeConfig
-                            cfg.streamQuality = q
-                            store.saveNavidromeConfig(cfg)
-                        }
-                    )) {
-                        ForEach(NavidromeStreamQuality.allCases) { q in
-                            Text(q.displayName).tag(q)
-                        }
-                    }
-
-                    Button {
-                        var cfg = store.navidromeConfig
-                        cfg.isEnabled = true
-                        cfg.serverURL = ndURL.trimmingCharacters(in: .whitespacesAndNewlines)
-                        cfg.username = ndUser.trimmingCharacters(in: .whitespacesAndNewlines)
-                        cfg.password = ndPass
-                        store.saveNavidromeConfig(cfg)
-                        Task { await store.testNavidromeConnection() }
-                    } label: {
-                        HStack {
-                            Label(store.isTestingNavidrome ? "Connecting..." : "Save & Test Tailscale Navidrome", systemImage: "antenna.radiowaves.left.and.right")
-                                .font(.system(size: 14, weight: .bold))
+                                .font(.system(size: 13, weight: .bold))
                                 .foregroundStyle(EchoiOSTheme.neoCyan)
-                            Spacer()
-                            if store.isTestingNavidrome { ProgressView() }
+                            }
                         }
                     }
 
-                    if let status = store.navidromeStatusText {
-                        Text(status).font(.system(size: 12, weight: .semibold)).foregroundStyle(EchoiOSTheme.neoMint)
-                    }
-                    if let err = store.navidromeError {
-                        Text(err).font(.system(size: 12)).foregroundStyle(EchoiOSTheme.dangerCoral)
-                    }
-                }
-                .listRowBackground(EchoiOSTheme.surface)
+                    Toggle("Auto-Sync on Home Wi-Fi", isOn: $bindable.autoSyncEnabled)
+                        .tint(EchoiOSTheme.neoMint)
+                        .onChange(of: store.autoSyncEnabled) { _, _ in store.saveWiFiSyncSettings() }
 
-                // 3. Playback Crossfade
-                Section("Hi-Fi Playback") {
+                    Toggle("Auto-Download New Podcast Episodes", isOn: $bindable.autoDownloadNewPodcasts)
+                        .tint(EchoiOSTheme.neoMint)
+                        .onChange(of: store.autoDownloadNewPodcasts) { _, _ in store.saveWiFiSyncSettings() }
+
                     Toggle("Equal-Power Crossfade (Offline)", isOn: Binding(
                         get: { store.player.crossfadeEnabled },
                         set: {
@@ -3506,30 +3467,236 @@ struct SyncAndSettingsTab: View {
                         }
                     ))
                     .tint(EchoiOSTheme.neoMint)
+                }
+                .listRowBackground(EchoiOSTheme.surface)
 
-                    if store.player.crossfadeEnabled {
-                        HStack {
-                            Text("Fade Duration: \(Int(store.player.crossfadeDuration.rounded()))s")
-                            Slider(
-                                value: Binding(
-                                    get: { store.player.crossfadeDuration },
-                                    set: {
-                                        store.player.crossfadeDuration = $0.rounded()
-                                        store.saveCrossfadeSettings()
+                // 2. Collapsed Settings & Related Details
+                Section("Settings") {
+                    DisclosureGroup(isExpanded: $showMacSettings) {
+                        if !store.discoveredMacs.isEmpty {
+                            ForEach(store.discoveredMacs) { mac in
+                                Button {
+                                    store.selectDiscoveredMac(mac)
+                                } label: {
+                                    HStack {
+                                        Image(systemName: "desktopcomputer")
+                                            .foregroundStyle(EchoiOSTheme.neoMint)
+                                        VStack(alignment: .leading) {
+                                            Text(mac.name)
+                                                .foregroundStyle(EchoiOSTheme.textPrimary)
+                                                .font(.system(size: 14, weight: .bold))
+                                            Text(mac.baseURLString)
+                                                .font(.system(size: 11, design: .monospaced))
+                                                .foregroundStyle(EchoiOSTheme.textMuted)
+                                        }
+                                        Spacer()
+                                        if store.macServerURL == mac.baseURLString {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .foregroundStyle(EchoiOSTheme.neoMint)
+                                        }
                                     }
-                                ),
-                                in: 1...12,
-                                step: 1
-                            )
-                            .tint(EchoiOSTheme.neoCyan)
+                                }
+                            }
                         }
+
+                        TextField("Mac Wi-Fi URL (e.g. http://192.168.0.50:48721)", text: $bindable.macServerURL)
+                            .keyboardType(.URL)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .onChange(of: store.macServerURL) { _, _ in store.saveWiFiSyncSettings() }
+
+                        TextField("Mac Tailscale Fallback (e.g. http://100.86.21.27:48721)", text: $bindable.macTailscaleURL)
+                            .keyboardType(.URL)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .onChange(of: store.macTailscaleURL) { _, _ in store.saveWiFiSyncSettings() }
+
+                        HStack(spacing: 8) {
+                            Button {
+                                store.macServerURL = iOSEchoStore.presetMacTailscaleURL
+                                store.macTailscaleURL = iOSEchoStore.presetMacTailscaleURL
+                                store.saveWiFiSyncSettings()
+                            } label: {
+                                Text("Preset: Mac Tailscale (100.86.21.27)")
+                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 5)
+                                    .background(EchoiOSTheme.neoCyan.opacity(0.16))
+                                    .foregroundStyle(EchoiOSTheme.neoCyan)
+                                    .clipShape(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusSmall))
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        TextField("6-Digit Pairing PIN (from My Echo Mac)", text: $bindable.pairingPIN)
+                            .keyboardType(.numberPad)
+                            .onChange(of: store.pairingPIN) { _, newValue in
+                                store.saveWiFiSyncSettings()
+                                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                                if trimmed.count == 6 && !store.macServerURL.isEmpty && !store.isSyncing {
+                                    Task { await store.syncNow() }
+                                }
+                            }
+                    } label: {
+                        Label("Mac Connection & Pairing", systemImage: "desktopcomputer")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(EchoiOSTheme.textPrimary)
                     }
+                    .tint(EchoiOSTheme.neoMint)
+
+                    DisclosureGroup(isExpanded: $showNavidromeSettings) {
+                        ForEach(store.navidromeConfig.savedAddresses) { addr in
+                            let isActive = store.navidromeConfig.serverURL
+                                .trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+                                .lowercased() == addr.url.lowercased()
+                            HStack {
+                                Button {
+                                    ndURL = addr.url
+                                    store.switchNavidromeAddress(addr)
+                                } label: {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
+                                            .foregroundStyle(isActive ? EchoiOSTheme.neoCyan : EchoiOSTheme.textMuted)
+                                        VStack(alignment: .leading, spacing: 1) {
+                                            Text(addr.label)
+                                                .font(.system(size: 13.5, weight: .bold))
+                                                .foregroundStyle(EchoiOSTheme.textPrimary)
+                                            Text(addr.url)
+                                                .font(.system(size: 11, design: .monospaced))
+                                                .foregroundStyle(EchoiOSTheme.textSecondary)
+                                        }
+                                        Spacer()
+                                    }
+                                }
+                                .buttonStyle(.plain)
+
+                                if store.navidromeConfig.savedAddresses.count > 1 {
+                                    Button {
+                                        store.removeNavidromeAddress(id: addr.id)
+                                        ndURL = store.navidromeConfig.serverURL
+                                    } label: {
+                                        Image(systemName: "trash")
+                                            .font(.system(size: 12))
+                                            .foregroundStyle(EchoiOSTheme.textMuted)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+
+                        TextField("Add / Edit Server URL (e.g. http://192.168.0.x:4533)", text: $ndURL)
+                            .keyboardType(.URL)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                        TextField("Username", text: $ndUser)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                        SecureField("Password", text: $ndPass)
+
+                        Picker("Streaming Quality", selection: Binding(
+                            get: { store.navidromeConfig.streamQuality },
+                            set: { q in
+                                var cfg = store.navidromeConfig
+                                cfg.streamQuality = q
+                                store.saveNavidromeConfig(cfg)
+                            }
+                        )) {
+                            ForEach(NavidromeStreamQuality.allCases) { q in
+                                Text(q.displayName).tag(q)
+                            }
+                        }
+
+                        Button {
+                            var cfg = store.navidromeConfig
+                            cfg.isEnabled = true
+                            cfg.serverURL = ndURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                            cfg.username = ndUser.trimmingCharacters(in: .whitespacesAndNewlines)
+                            cfg.password = ndPass
+                            store.saveNavidromeConfig(cfg)
+                            Task { await store.testNavidromeConnection() }
+                        } label: {
+                            HStack {
+                                Label(store.isTestingNavidrome ? "Connecting..." : "Save & Test Navidrome", systemImage: "antenna.radiowaves.left.and.right")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundStyle(EchoiOSTheme.neoCyan)
+                                Spacer()
+                                if store.isTestingNavidrome { ProgressView() }
+                            }
+                        }
+
+                        if let status = store.navidromeStatusText {
+                            Text(status)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(EchoiOSTheme.neoMint)
+                        }
+                        if let err = store.navidromeError {
+                            Text(err)
+                                .font(.system(size: 12))
+                                .foregroundStyle(EchoiOSTheme.dangerCoral)
+                        }
+                    } label: {
+                        Label("Navidrome Streaming", systemImage: "antenna.radiowaves.left.and.right")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(EchoiOSTheme.textPrimary)
+                    }
+                    .tint(EchoiOSTheme.neoMint)
+
+                    DisclosureGroup(isExpanded: $showSyncDetails) {
+                        HStack {
+                            Text("Status")
+                            Spacer()
+                            Text(store.syncStatusText)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(store.syncError != nil ? EchoiOSTheme.dangerCoral : EchoiOSTheme.neoMint)
+                        }
+
+                        if let last = store.lastSyncedAt {
+                            HStack {
+                                Text("Last Synced")
+                                Spacer()
+                                Text(last.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .foregroundStyle(EchoiOSTheme.textSecondary)
+                            }
+                        }
+
+                        HStack {
+                            Text("Offline Storage Used")
+                            Spacer()
+                            Text(iOSFormatters.bytes(store.localStorageBytes))
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(EchoiOSTheme.neoCyan)
+                        }
+
+                        if store.player.crossfadeEnabled {
+                            HStack {
+                                Text("Crossfade: \(Int(store.player.crossfadeDuration.rounded()))s")
+                                Slider(
+                                    value: Binding(
+                                        get: { store.player.crossfadeDuration },
+                                        set: {
+                                            store.player.crossfadeDuration = $0.rounded()
+                                            store.saveCrossfadeSettings()
+                                        }
+                                    ),
+                                    in: 1...12,
+                                    step: 1
+                                )
+                                .tint(EchoiOSTheme.neoMint)
+                            }
+                        }
+                    } label: {
+                        Label("Sync Status, Storage & Crossfade", systemImage: "slider.horizontal.3")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(EchoiOSTheme.textPrimary)
+                    }
+                    .tint(EchoiOSTheme.neoMint)
                 }
                 .listRowBackground(EchoiOSTheme.surface)
             }
             .scrollContentBackground(.hidden)
             .background(EchoiOSTheme.canvas)
-            .navigationTitle("Sync & Servers")
+            .navigationTitle("Sync")
             .onAppear {
                 ndURL = store.navidromeConfig.serverURL
                 ndUser = store.navidromeConfig.username
@@ -3677,6 +3844,7 @@ struct NowPlayingSheetView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var isScrubbing = false
     @State private var scrubVal: Double = 0
+    @State private var showLightbox = false
 
     var body: some View {
         let player = store.player
@@ -3687,17 +3855,48 @@ struct NowPlayingSheetView: View {
                 .padding(.top, 10)
 
             if let item = player.currentItem {
-                Group {
-                    if let local = item.localArtworkURL {
-                        LocalArtworkImage(url: local)
-                    } else {
-                        RemoteArtworkImage(url: item.remoteArtworkURL)
+                Button {
+                    showLightbox = true
+                } label: {
+                    ZStack(alignment: .bottomTrailing) {
+                        Group {
+                            if let local = item.localArtworkURL {
+                                LocalArtworkImage(url: local)
+                            } else {
+                                RemoteArtworkImage(url: item.remoteArtworkURL)
+                            }
+                        }
+                        .aspectRatio(1, contentMode: .fit)
+                        .frame(maxWidth: 310)
+                        .clipShape(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusCard))
+                        .overlay(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusCard).strokeBorder(EchoiOSTheme.neoMint.opacity(0.35), lineWidth: 1))
+                        .shadow(color: .black.opacity(0.6), radius: 20, y: 8)
+
+                        Image(systemName: "info.circle.fill")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(EchoiOSTheme.neoMint)
+                            .padding(8)
+                            .background(Color.black.opacity(0.68))
+                            .clipShape(Circle())
+                            .padding(10)
                     }
                 }
-                .aspectRatio(1, contentMode: .fit)
-                .frame(maxWidth: 310)
-                .clipShape(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusCard))
-                .shadow(color: .black.opacity(0.6), radius: 20, y: 8)
+                .buttonStyle(.plain)
+                .sheet(isPresented: $showLightbox) {
+                    let matchingAlbum = store.albums.first { $0.title.caseInsensitiveCompare(item.album) == .orderedSame }
+                    let qualityStr = item.formatDetail.map { "\(item.formatPrimary) · \($0)" } ?? item.formatPrimary
+                    iOSAlbumLightboxSheet(
+                        albumTitle: item.album.isEmpty ? item.title : item.album,
+                        artistName: item.artist,
+                        year: matchingAlbum?.year,
+                        trackCount: matchingAlbum?.tracks.count,
+                        totalDuration: matchingAlbum?.tracks.reduce(0) { $0 + $1.duration },
+                        audioQuality: qualityStr,
+                        localArtworkURL: item.localArtworkURL,
+                        remoteArtworkURL: item.remoteArtworkURL
+                    )
+                    .environment(store)
+                }
 
                 VStack(spacing: 6) {
                     Text(item.title)
@@ -3877,5 +4076,256 @@ struct RemoteArtworkImage: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - iOS / iPadOS Album Artwork & Editorial Lightbox Sheet
+
+struct iOSAlbumLightboxSheet: View {
+    @Environment(iOSEchoStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+
+    let albumTitle: String
+    let artistName: String
+    let year: Int?
+    let trackCount: Int?
+    let totalDuration: TimeInterval?
+    let audioQuality: String?
+    let localArtworkURL: URL?
+    let remoteArtworkURL: URL?
+
+    private var albumInfo: SyncedAlbumEditorial? {
+        store.albumEditorial(for: albumTitle)
+    }
+
+    private var artistInfo: SyncedArtistEditorial? {
+        let primary = artistName.components(separatedBy: CharacterSet(charactersIn: ",;&")).first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? artistName
+        return store.artistEditorial(for: primary)
+    }
+
+    private var isFetching: Bool {
+        store.fetchingEditorialKeys.contains(albumTitle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+
+    private var artworkResolutionText: String? {
+        guard let url = localArtworkURL,
+              let img = UIImage(contentsOfFile: url.path) else { return nil }
+        let w = Int(img.size.width * img.scale)
+        let h = Int(img.size.height * img.scale)
+        guard w > 0, h > 0 else { return nil }
+        return "\(w) × \(h) px"
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    // Large Artwork Showcase
+                    ZStack(alignment: .bottomTrailing) {
+                        Group {
+                            if let local = localArtworkURL {
+                                LocalArtworkImage(url: local)
+                            } else {
+                                RemoteArtworkImage(url: remoteArtworkURL)
+                            }
+                        }
+                        .aspectRatio(1, contentMode: .fit)
+                        .frame(maxWidth: 420)
+                        .frame(maxWidth: .infinity)
+                        .clipShape(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusCard, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: EchoiOSTheme.radiusCard, style: .continuous)
+                                .strokeBorder(EchoiOSTheme.neoMint.opacity(0.50), lineWidth: 1.2)
+                        )
+                        .shadow(color: .black.opacity(0.65), radius: 22, y: 10)
+
+                        if let res = artworkResolutionText {
+                            Text(res)
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundStyle(EchoiOSTheme.neoMint)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.black.opacity(0.78))
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(EchoiOSTheme.neoMint.opacity(0.45), lineWidth: 0.8))
+                                .padding(10)
+                        }
+                    }
+
+                    // Album Title + Artist Header
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("ALBUM & ARTIST INFO")
+                            .font(.system(size: 10, weight: .black, design: .monospaced))
+                            .tracking(1.3)
+                            .foregroundStyle(EchoiOSTheme.neoMint)
+
+                        Text(albumTitle)
+                            .font(.system(size: 24, weight: .black))
+                            .foregroundStyle(EchoiOSTheme.textPrimary)
+
+                        HStack(spacing: 8) {
+                            if let picStr = albumInfo?.artistImageURL ?? artistInfo?.imageURL,
+                               let picURL = URL(string: picStr) {
+                                AsyncImage(url: picURL) { phase in
+                                    if case .success(let img) = phase {
+                                        img.resizable()
+                                            .aspectRatio(contentMode: .fill)
+                                            .frame(width: 24, height: 24)
+                                            .clipShape(Circle())
+                                            .overlay(Circle().strokeBorder(EchoiOSTheme.neoMint.opacity(0.55), lineWidth: 1))
+                                    }
+                                }
+                            }
+                            Text(artistName)
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundStyle(EchoiOSTheme.neoMint)
+                        }
+                    }
+
+                    // Structured Metadata Grid
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                        lightboxMetaTile(
+                            label: "RELEASE",
+                            value: albumInfo?.releaseDate ?? year.map(String.init) ?? "Unknown",
+                            icon: "calendar"
+                        )
+                        if let tc = trackCount {
+                            let durStr = totalDuration.map { " · \(iOSFormatters.duration($0))" } ?? ""
+                            lightboxMetaTile(
+                                label: "TRACKS",
+                                value: "\(tc) tracks\(durStr)",
+                                icon: "music.note.list"
+                            )
+                        }
+                        if let q = audioQuality, !q.isEmpty {
+                            lightboxMetaTile(label: "AUDIO QUALITY", value: q, icon: "waveform")
+                        }
+                        if let label = albumInfo?.label {
+                            lightboxMetaTile(label: "RECORD LABEL", value: label, icon: "opticaldisc")
+                        }
+                        if let fans = albumInfo?.artistFans ?? artistInfo?.fans {
+                            lightboxMetaTile(label: "ARTIST FANS", value: Self.compactCount(fans), icon: "heart.fill")
+                        }
+                        if let count = albumInfo?.artistAlbumCount ?? artistInfo?.albumCount {
+                            lightboxMetaTile(label: "RELEASES", value: "\(count) releases", icon: "square.stack.fill")
+                        }
+                    }
+
+                    // Genres
+                    if let genres = albumInfo?.genres, !genres.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(genres.prefix(5), id: \.self) { g in
+                                    Text(g)
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(EchoiOSTheme.neoMint)
+                                        .padding(.horizontal, 9)
+                                        .padding(.vertical, 4)
+                                        .background(EchoiOSTheme.neoMint.opacity(0.14))
+                                        .clipShape(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusSmall))
+                                        .overlay(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusSmall).strokeBorder(EchoiOSTheme.neoMint.opacity(0.4), lineWidth: 0.9))
+                                }
+                            }
+                        }
+                    }
+
+                    // Album Summary
+                    if let albumSummary = albumInfo?.albumSummary {
+                        lightboxInfoBox(title: "ABOUT THIS ALBUM", text: albumSummary)
+                    }
+
+                    // Artist Bio
+                    if let artistSummary = albumInfo?.artistSummary ?? artistInfo?.summary {
+                        lightboxInfoBox(title: "ABOUT \(artistName.uppercased())", text: artistSummary)
+                    } else if isFetching {
+                        HStack(spacing: 8) {
+                            ProgressView().tint(EchoiOSTheme.neoMint)
+                            Text("Loading album & artist info...")
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(EchoiOSTheme.textMuted)
+                        }
+                        .padding(.vertical, 6)
+                    }
+
+                    if let fetched = albumInfo?.fetchedAt ?? artistInfo?.fetchedAt {
+                        Text("Cached locally · Updated \(fetched.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(EchoiOSTheme.textMuted)
+                    }
+                }
+                .padding(18)
+            }
+            .background(EchoiOSTheme.canvas)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        Task { await store.ensureEditorialLoaded(albumTitle: albumTitle, artist: artistName, force: true) }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .foregroundStyle(EchoiOSTheme.neoMint)
+                    }
+                    .disabled(isFetching)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .fontWeight(.bold)
+                        .foregroundStyle(EchoiOSTheme.neoMint)
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+        .task {
+            await store.ensureEditorialLoaded(albumTitle: albumTitle, artist: artistName)
+        }
+    }
+
+    private func lightboxMetaTile(label: String, value: String, icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(EchoiOSTheme.neoMint)
+                Text(label)
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .tracking(0.8)
+                    .foregroundStyle(EchoiOSTheme.textMuted)
+            }
+            Text(value)
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(EchoiOSTheme.textPrimary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(EchoiOSTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusControl))
+        .overlay(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusControl).strokeBorder(EchoiOSTheme.border, lineWidth: 1))
+    }
+
+    private func lightboxInfoBox(title: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 10, weight: .black, design: .monospaced))
+                .tracking(1.0)
+                .foregroundStyle(EchoiOSTheme.neoMint)
+            Text(text)
+                .font(.system(size: 13))
+                .foregroundStyle(EchoiOSTheme.textSecondary)
+                .lineSpacing(3.5)
+        }
+        .padding(13)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(EchoiOSTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusCard))
+        .overlay(RoundedRectangle(cornerRadius: EchoiOSTheme.radiusCard).strokeBorder(EchoiOSTheme.borderStrong, lineWidth: 1))
+    }
+
+    private static func compactCount(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000.0) }
+        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000.0) }
+        return "\(n)"
     }
 }

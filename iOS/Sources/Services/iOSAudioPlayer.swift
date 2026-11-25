@@ -41,11 +41,67 @@ final class iOSAudioPlayer: NSObject, AVAudioPlayerDelegate {
     private var timer: Timer?
     private var lastTickDate: Date?
     private var scrobbledCurrentStream: Bool = false
+    private var pausedByInterruption: Bool = false
+    private var interruptionObserver: NSObjectProtocol?
+    private var routeChangeObserver: NSObjectProtocol?
 
     override init() {
         super.init()
         configureAudioSession()
+        configureAudioInterruptionObservers()
         configureRemoteCommands()
+    }
+
+    private func configureAudioInterruptionObservers() {
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] notification in
+            let userInfo = notification.userInfo
+            let rawType = userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            let rawOptions = userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+            Task { @MainActor [weak self] in
+                guard let self, let rawType,
+                      let type = AVAudioSession.InterruptionType(rawValue: rawType) else { return }
+                switch type {
+                case .began:
+                    if self.isPlaying {
+                        self.pausedByInterruption = true
+                        self.pause()
+                    }
+                case .ended:
+                    let options = AVAudioSession.InterruptionOptions(rawValue: rawOptions)
+                    if self.pausedByInterruption {
+                        self.pausedByInterruption = false
+                        if options.contains(.shouldResume) {
+                            DispatchQueue.global(qos: .userInitiated).async {
+                                try? AVAudioSession.sharedInstance().setActive(true)
+                            }
+                            self.resume()
+                        }
+                    }
+                @unknown default:
+                    break
+                }
+            }
+        }
+
+        routeChangeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] notification in
+            let rawReason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+            Task { @MainActor [weak self] in
+                guard let self, let rawReason,
+                      let reason = AVAudioSession.RouteChangeReason(rawValue: rawReason) else { return }
+                if reason == .oldDeviceUnavailable && self.isPlaying {
+                    self.pausedByInterruption = false
+                    self.pause()
+                }
+            }
+        }
     }
 
     nonisolated private func configureAudioSession() {
@@ -124,6 +180,7 @@ final class iOSAudioPlayer: NSObject, AVAudioPlayerDelegate {
     }
 
     func resume() {
+        pausedByInterruption = false
         if let localPlayer {
             localPlayer.play()
             if isCrossfading { fadingOutLocalPlayer?.play() }
