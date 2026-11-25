@@ -40,15 +40,31 @@ cat > "$CONTENTS_DIR/Info.plist" <<'EOF'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.2.0</string>
+    <string>1.3.0</string>
     <key>CFBundleVersion</key>
-    <string>3</string>
+    <string>4</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>My Echo syncs your music, playlists, and podcasts to removable FiiO DAPs, MP3 players, and SD cards.</string>
+    <key>NSNetworkVolumesUsageDescription</key>
+    <string>My Echo indexes and plays your music libraries stored on mounted NAS / network shares.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>My Echo advertises its local Wi-Fi Auto-Sync server via Bonjour so the My Echo iPhone and iPad app can pair and sync automatically.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_myecho._tcp</string>
+    </array>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>My Echo can read music libraries or export files from your Desktop folder when selected.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>My Echo can read music libraries or OPML files from your Documents folder when selected.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>My Echo can read music libraries or OPML files from your Downloads folder when selected.</string>
 </dict>
 </plist>
 EOF
@@ -213,5 +229,20 @@ SWIFT
 
 iconutil -c icns "$ICONSET_DIR" -o "$RESOURCES_DIR/AppIcon.icns"
 rm -rf "$ICONSET_DIR"
+
+# Sign with a stable Apple Development / Developer ID certificate when available so macOS TCC
+# permanently remembers Removable Volumes, Network Volumes, Local Network & Folder permissions across rebuilds!
+SIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
+if [[ -z "$SIGN_IDENTITY" ]]; then
+    SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Developer ID Application|Apple Development/ {print $2; exit}' || true)"
+fi
+
+if [[ -n "$SIGN_IDENTITY" ]]; then
+    echo "▶ Signing My Echo.app with stable identity: $SIGN_IDENTITY"
+    codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_DIR"
+else
+    echo "▶ No Apple Development certificate found; signing ad-hoc (-)"
+    codesign --force --deep --sign - "$APP_DIR"
+fi
 
 echo "✅ Built $APP_DIR"

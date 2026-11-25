@@ -1,6 +1,50 @@
-# My Echo — Native macOS Hi-Fi Music, Podcast & FiiO DAP Sync Studio
+# My Echo — Native macOS & iOS Hi-Fi Music, Podcast & DAP Sync Studio
 
-**My Echo** is a native Swift 6 / SwiftUI macOS application built for audiophiles and portable Digital Audio Player (DAP) owners. It combines a Spotify-familiar library browser, a 90s neon retro aesthetic (with 5 live-switchable hardware-inspired & frosted glass themes), a floating **Winamp-style Mini Player**, multi-directory podcast discovery & auto-rotating downloads, and a zero-dependency FiiO-aware sync engine that maintains strict `ARTIST/ALBUM/TRACK` storage structures on SD cards and audio players.
+**My Echo** is a native Swift 6 / SwiftUI macOS studio and Universal iPhone & iPad companion app built for audiophiles, portable Digital Audio Player (DAP) owners, and self-hosted music collectors. It scales effortlessly from a classic offline iTunes-style MP3/DAP sync station all the way up to a NAS-backed multi-device Hi-Fi hub with Wi-Fi iOS syncing, **Navidrome** streaming, and **Lidarr** downloading.
+
+---
+
+## Choose Your Setup (Use Cases)
+
+Whether you just want a clean offline MP3 player sync tool or a full homelab audio stack, My Echo grows with you:
+
+### 1. Simple — Classic MP3 / DAP Sync Station *(Like iTunes + iPod Originally Worked)*
+- **What you need:** Your Mac + local music folder + a FiiO/Snowsky DAP, MP3 player, or microSD card.
+- **How it works:** Point My Echo at your music folder, browse by Artists/Albums/Tracks, build playlists via drag-and-drop, check the albums, playlists, or podcasts you want on your player, and click **Sync**.
+- **Why it's effortless:** Maintains strict `ARTIST/ALBUM/TRACK` folders, optimizes cover art on the fly (sRGB Baseline JPEG + ID3v2.3) without touching your originals, exports `.m3u`/`.m3u8` playlists, rotates latest podcast episodes, and purges macOS `._*` junk files on **Clean & Eject**.
+
+### 2. Simple — Offline iPhone & iPad Player Paired with Mac
+- **What you need:** Your Mac + the Universal **My Echo iOS** app on iPhone and/or iPad.
+- **How it works:** Create an iPhone/iPad destination in My Echo on Mac, pair once over local Wi-Fi using Bonjour + a 6-digit PIN, and let My Echo automatically sync your selected lossless FLAC/ALAC/MP3 tracks, playlists, and podcast feeds to your phone or tablet.
+- **Why it's effortless:** Enjoy true offline Hi-Fi playback anywhere (flights, commutes, no cell service) with scrubbable timeline, elapsed/remaining clocks, crossfade, lock-screen controls, and independent on-device RSS podcast refreshes that never duplicate Mac-synced episodes.
+
+### 3. Advanced — Offline + Online Homelab Hub *(NAS + Multi-Device + Navidrome + Lidarr + On-the-Go iOS)*
+- **What you need:** Mac + NAS (Unraid/Synology/TrueNAS) + multiple players (DAPs, iPhone, iPad) + optional **Navidrome**, **Lidarr**, and **Tailscale**.
+- **How it works:**
+  - **NAS Music Libraries:** Index huge SMB/NFS NAS shares with incremental SQLite caching and offline NAS resilience (unmounted shares stay safely preserved without losing playlists or device selections).
+  - **Multiple Players, Individual Libraries:** Manage FiiO Echo, FiiO Disc, iPhone, iPad, and SD cards side by side — each destination remembers its own independent selection of artists, albums, single tracks, playlists, and podcast feeds.
+  - **Stream Your Full Collection via Navidrome:** Connect the iOS app to your NAS Navidrome server (with 1-tap switching between Home LAN and Tailscale URLs) to search artists, albums, tracks, and playlists, stream lossless or transcoded audio on the go, and save individual tracks or albums offline directly into your device library.
+  - **Order New Music via Lidarr:** Search and order missing albums or single tracks directly into your NAS Lidarr instance from both the macOS app and the iOS app (relayed securely through My Echo on Mac).
+  - **Add Music & Podcasts On the Go (iOS App):** Search your entire Mac library from iPhone/iPad to toggle single tracks or full albums into your offline sync queue, or flip the Podcasts **Offline / Online** switch to search Apple Podcasts & gPodder directories on the go — new podcast subscriptions sync right back to My Echo on Mac automatically.
+
+```text
+                ┌──────────────────────────────────────────────────────┐
+                │                 NAS / Homelab (Optional)             │
+                │   SMB/NFS Music Share · Navidrome · Lidarr · Tailscale│
+                └──────────────┬───────────────────────────┬───────────┘
+                               │ Mount & Index / Lidarr    │ Stream / Save Offline
+                               ▼                           ▼
+                  ┌─────────────────────────┐   Wi-Fi / Tailscale   ┌───────────────────────┐
+                  │   My Echo (macOS App)   │ ◄───────────────────► │  My Echo (iPhone/iPad)│
+                  │  Library · Playlists    │   Sync Music, Feeds,  │  Offline Hi-Fi Player │
+                  │  Podcasts · Multi-Sync  │   Remote Add & Orders │  Navidrome · Podcasts │
+                  └────────────┬────────────┘                       └───────────────────────┘
+                               │ USB / SD Card (ARTIST/ALBUM/TRACK + .m3u + Clean ._*)
+                               ▼
+                  ┌──────────────────────────────────────────┐
+                  │  FiiO Echo / Nano / Disc / Any MP3 DAP   │
+                  └──────────────────────────────────────────┘
+```
 
 ---
 
@@ -23,28 +67,29 @@
 
 Prebuilt macOS (Apple Silicon) `.app` bundles are published on the [**GitHub Releases**](https://github.com/baardove/my-echo/releases) page.
 
-### Latest Release — [`v1.2.0`](https://github.com/baardove/my-echo/releases/tag/v1.2.0)
+### Latest Release — [`v1.3.0`](https://github.com/baardove/my-echo/releases/tag/v1.3.0)
 
-- **Download:** [`My-Echo-v1.2.0-macOS-arm64.zip`](https://github.com/baardove/my-echo/releases/download/v1.2.0/My-Echo-v1.2.0-macOS-arm64.zip) (2.8 MB, macOS 14+ Apple Silicon)
-- **SHA-256 Checksum:** [`My-Echo-v1.2.0-macOS-arm64.zip.sha256`](https://github.com/baardove/my-echo/releases/download/v1.2.0/My-Echo-v1.2.0-macOS-arm64.zip.sha256)
+- **Download:** [`My-Echo-v1.3.0-macOS-arm64.zip`](https://github.com/baardove/my-echo/releases/download/v1.3.0/My-Echo-v1.3.0-macOS-arm64.zip) (4.4 MB, macOS 14+ Apple Silicon)
+- **SHA-256 Checksum:** [`My-Echo-v1.3.0-macOS-arm64.zip.sha256`](https://github.com/baardove/my-echo/releases/download/v1.3.0/My-Echo-v1.3.0-macOS-arm64.zip.sha256)
   ```text
-  354ddb31be91477d91519b1a6254158893b13acf2e8a8c1c4ddfb7386015af4b  My-Echo-v1.2.0-macOS-arm64.zip
+  b74c682055fb5743ae5a21963b409123588dd49fb3ed6afd44c5910325b12d8c  My-Echo-v1.3.0-macOS-arm64.zip
   ```
 
 #### Quick Install
-1. Download and unzip `My-Echo-v1.2.0-macOS-arm64.zip`.
+1. Download and unzip `My-Echo-v1.3.0-macOS-arm64.zip`.
 2. Drag **`My Echo.app`** into `/Applications`.
 3. Verify checksum (optional):
    ```bash
-   shasum -a 256 -c My-Echo-v1.2.0-macOS-arm64.zip.sha256
+   shasum -a 256 -c My-Echo-v1.3.0-macOS-arm64.zip.sha256
    ```
-4. Because GitHub releases are ad-hoc signed (not notarized with a paid Apple Developer ID), if macOS Gatekeeper warns on first open, clear the quarantine attribute once:
+4. Because GitHub releases are not notarized with a paid Apple Developer ID, if macOS Gatekeeper warns on first open, clear the quarantine attribute once:
    ```bash
    xattr -cr "/Applications/My Echo.app"
    ```
    *(Or build locally from source in ~20 seconds with `./build-app.sh`.)*
 
 #### Release History
+- **[`v1.3.0`](https://github.com/baardove/my-echo/releases/tag/v1.3.0)** — Major studio, sync & companion release: **Universal iPhone & iPad companion app** (`iOS/`) with Bonjour Wi-Fi Auto-Sync, Navidrome streaming, and podcast search/sync-back; **Dark Neon-Green UI refresh** with AppKit-proof dropdowns, pickers, segmented controls, and `P`/`S` card badges; **Album Artwork Lightbox** with responsive right-side Album & Artist info panels and local SQLite editorial caching; **Auto-Scan schedule** (`Off` to `Every week`) with quiet zero-change indexing; **0.20s anti-pop song-switch fade**; **DiskArbitration/IOKit `IN PLAYER` vs `CARD READER` detection**; unified **Various Artists / majority-artist album grouping & fast in-place sync relocation**; **Lidarr** downloads integration; **18 podcast genres**; and major macOS performance optimizations ($O(1)$ selection caches + off-main-actor sync planning).
 - **[`v1.2.0`](https://github.com/baardove/my-echo/releases/tag/v1.2.0)** — Initial public macOS release: multi-source local & NAS indexing, pure-Swift metadata/artwork optimizer (`ARTIST/ALBUM/TRACK` + Baseline RGB JPEG + ID3v2.3 + `.lrc` + `._*` cleanup), **FiiO Echo / Nano / Disc / Android DAP / Generic** profiles, Single & Multi-Destination sync memory, drag-and-drop playlists, multi-directory podcasts with per-show episode rotation, freely height-resizable Winamp Mini Player, `diskutil` Clean & Eject, and 5 live themes (including **Frosted Glass**).
 
 ---
