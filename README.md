@@ -1,6 +1,6 @@
 # My Echo — Native macOS & iOS Hi-Fi Music, Podcast & DAP Sync Studio
 
-**My Echo** is a native Swift 6 / SwiftUI macOS studio and Universal iPhone & iPad companion app built for audiophiles, portable Digital Audio Player (DAP) owners, and self-hosted music collectors. It scales effortlessly from a classic offline iTunes-style MP3/DAP sync station all the way up to a NAS-backed multi-device Hi-Fi hub with Wi-Fi iOS syncing, **Navidrome** streaming, and **Lidarr** downloading.
+**My Echo** is a native Swift 6 / SwiftUI macOS studio and Universal iPhone & iPad companion app built for audiophiles, portable Digital Audio Player (DAP) owners, and self-hosted music collectors. It scales effortlessly from a classic offline iTunes-style MP3/DAP sync station all the way up to a NAS-backed multi-device Hi-Fi hub with Wi-Fi iOS syncing, **Navidrome** streaming, **Lidarr** downloading, and a built-in **Party Mode Jukebox** web server for guests.
 
 ---
 
@@ -93,6 +93,44 @@ Whether you just want a clean offline MP3 player sync tool or a full homelab aud
 
 ---
 
+## Party Mode Jukebox (`⌘⇧P`)
+
+Turn your Mac and entire local/NAS music collection into a collaborative **LAN Party Jukebox** — no app install required for guests. Press **`⌘⇧P`** or click **Party Mode** in the sidebar to lock playback onto the dynamic **`Partymode`** playlist and launch an embedded local web server with an instant QR code.
+
+### Key Capabilities
+- **Locked Dynamic `Partymode` Playlist:** Locks playback onto a dedicated `Partymode` queue so browsing your library never interrupts the party. Displays live **scheduled start timestamps (`HH:mm`)** for every queued track, plus one-click **Clear Played** and **Host Quick Add**.
+- **Zero-Install Guest Web Jukebox (QR Code & LAN URL):** Guests on the same Wi-Fi scan the QR code (or open the LAN URL — default port `53333`, editable or randomized in one click) from any phone, tablet, or laptop browser.
+- **Instant Full-Library Search & Browsing:** Search across your entire indexed collection with multi-field operators (`artist:`, `track:`, `album:`, `+required`, `-excluded`) or browse by **A–Z**, **New**, and **Shuffle**, with live `+ Add` / `✓ Queued` status and Now Playing track info.
+- **Broadcast-Processed DJ Voice Intros:** After queuing a song, guests can tap **Record Intro** right from their phone (powered by an automatic companion local HTTPS/TLS listener for seamless mobile Safari/Chrome microphone access). Voice clips are run through a built-in broadcast vocal chain (EQ, de-mud, compression, loudness normalization, and peak limiting) and mixed over the incoming song with smooth music ducking and a 5-second overlap. Hosts control the **Max Intro** limit (e.g. `15s`).
+- **Listen-Along Live Stream & Party Chat:** Guests can tap **Listen** to stream the live party audio to their own device or headphones, see everyone currently active in the party, get prompted for a display name on first visit, and message the room in real-time **Party Chat**. All host options — **Auto-play on request**, **Allow re-request played**, **Party Chat**, **Listen-Along Stream**, custom/random port, and **Max Voice Intro** duration — live neatly inside the **Settings** lightbox.
+- **One-Click Native Share:** Share the Guest Web Jukebox link directly via AirDrop, Messages, Mail, or other macOS apps alongside Copy and QR code scanning.
+
+### macOS Host Control Center · QR Code, Live Schedule, Voice Intro Controls & Party Chat
+![My Echo Party Mode macOS Host Control Center](docs/screenshots/party-mode-mac-host.jpg)
+
+### Guest Web Jukebox (Desktop / Tablet) · Full Library Search, Listen-Along & Live Queue
+![My Echo Party Mode Desktop Guest Web App](docs/screenshots/party-mode-web-desktop.jpg)
+
+### Mobile Guest Web App · Track Requests & Voice Intros, Live Queue & Party Chat
+<table>
+  <tr>
+    <td align="center">
+      <img src="docs/screenshots/party-mode-mobile-tracks-intro.jpg" alt="Party Mode Mobile — Track Search & Record Voice Intro" width="260" /><br />
+      <sub><strong>Tracks &amp; DJ Voice Intro</strong></sub>
+    </td>
+    <td align="center">
+      <img src="docs/screenshots/party-mode-mobile-queue.jpg" alt="Party Mode Mobile — Live Queue & Scheduled Play Times" width="260" /><br />
+      <sub><strong>Live Queue &amp; Play Schedule</strong></sub>
+    </td>
+    <td align="center">
+      <img src="docs/screenshots/party-mode-mobile-chat.png" alt="Party Mode Mobile — Real-Time Party Chat" width="260" /><br />
+      <sub><strong>Real-Time Party Chat</strong></sub>
+    </td>
+  </tr>
+</table>
+
+---
+
 ## Releases & Download
 
 Prebuilt macOS (Apple Silicon) `.app` bundles are published on the [**GitHub Releases**](https://github.com/baardove/my-echo/releases) page.
@@ -133,7 +171,8 @@ Prebuilt macOS (Apple Silicon) `.app` bundles are published on the [**GitHub Rel
 - **Incremental SQLite Indexing:** Uses `(filePath, fileSize, modifiedAt)` caching in `~/Library/Application Support/Echo/echo.sqlite` so re-indexing large libraries is fast.
 - **Offline NAS Resilience:** If a NAS volume is temporarily unmounted, tracks remain safely preserved (marked `OFFLINE`) without erasing your playlists or device sync selections.
 - **Persistent Library Scope:** Pick **All Libraries** or lock into a single library source from the sidebar or top bar — exploring **Home**, **Artists**, **Albums**, **Tracks**, detail views, and **Global Search** stays strictly inside your selected library until you switch.
-- **Scoped Global Search:** Type in the top-bar search box from any screen to search Artists, Albums, Tracks, and Playlists inside the active library (or subscribed Podcast shows & episodes when viewing Podcasts).
+- **Scoped Global Search & Star Filtering:** Type in the top-bar search box from any screen to search Artists, Albums, Tracks, and Playlists across multiple fields (`Bruce Springsteen The River`), exclude keywords (`-live`), require keywords (`+river`), or use field prefixes (`Artist: Bruce Track: river`, `album:`, `genre:`, `year:`, `format:`, `rating:4+`). Click the adjacent **1–5 Star Filter** pill to filter your library to items rated at least `X` stars.
+- **1–5 Star Track & Album Ratings:** Rate individual tracks and albums (`1–5` stars, click the active star again to clear) right from track rows, the Now Playing bar, Album Detail, Album Cards, Artist album headers, and the Album Lightbox. Ratings persist in SQLite independently across library re-indexes and support **Highest Rated** sorting.
 
 ### 2. Pure-Swift Audio Metadata & Hi-Fi Parser
 Built with zero third-party native library dependencies (`EchoCore`):
@@ -192,21 +231,23 @@ Configure in **Settings (`⌘,`)**:
   - Open playlist rows (reorder tracks via drag-and-drop)
   - Any **Player / SD Card** card in the sidebar (assign to sync on that destination)
   - The bottom **Player Bar** or **Winamp Mini Player** (enqueue for playback)
-- **Playlist Sync Toggles:** Include/exclude playlists right from sidebar `SYNC` badges, the playlist header switch, or the Device Sync **Playlists** tab.
+- **Playlist Sync Toggles & Management:** Include/exclude playlists right from sidebar `SYNC` badges, the playlist header switch, or the Device Sync **Playlists** tab (the dynamic `Partymode` playlist is kept local and excluded from sync). Right-click playlists in the sidebar to **Duplicate Playlist** or **Export Playlist** as standard **`.pls` (Winamp v2)** or **`.m3u8` (Extended M3U)**.
+- **Fast Keyboard & Context-Menu Editing:** Click or focus any track in a playlist, the live `Partymode` queue, or the Mini Player queue drawer and press **`Delete` (`⌫` / `⌦`)** to remove it immediately with no confirmation. Right-click any playlist track to **Remove from Playlist** or **Add to Another Playlist**.
 
 ### 7. Podcasts — Multi-Directory Search, RSS, OPML & Episode Rotation
 - **Multi-Directory Search:** Search across **All Directories** (Apple Podcasts + gPodder Open Directory combined), **Apple Podcasts**, **gPodder Open**, or **Featured Picks**, plus quick category/top-chart browse chips (*Featured*, *Top Charts*, *Technology*, *Music & Hi-Fi*, *Science*, *History*, *Comedy*, *True Crime*, *Nordic / NO*).
 - **Direct RSS & OPML Import:** Paste any RSS/XML feed URL or bulk-import subscriptions from an `.opml` file exported by Apple Podcasts, Pocket Casts, Overcast, or AntennaPod.
 - **Per-Podcast "Keep Latest N" Rotation:** Set `Keep: 1 / 2 / 3 / 5 / 10 / 15 / 25 / All` per podcast show. When newer episodes are synced, Echo automatically downloads them on the fly and removes older episodes beyond that show's keep limit from your player (in both Mirror and Additive modes).
 
-### 8. Built-In Spotify-Style Player & Winamp Mini Player (`⌘⇧M`)
-- **Bottom Player Bar:** Play/pause, prev/next, interactive scrub slider, volume/mute, shuffle, repeat (`Off / All / One`), and Up Next queue popover.
-- **Floating Winamp Mini Player (`EchoAmp Mini`):** Launch via the **`MINI`** button in the player bar or `⌘⇧M`:
-  - Classic phosphor LCD clock (click to toggle elapsed vs. remaining time)
+### 8. Built-In Spotify-Style Player, Audio Routing, Call Auto-Pause & Winamp Mini Player (`⌘⇧M`)
+- **Bottom Player Bar:** Play/pause, prev/next, interactive scrub slider, **1–5 star rating**, **CoreAudio sound output device picker** (with live mid-track hot-switching), volume/mute, shuffle, repeat (`Off / All / One`), equal-power crossfade, and Up Next queue popover.
+- **Persistent Queue, Media Keys & Call Auto-Pause:** Automatically saves your active playing queue, track index, and playback position to SQLite across app restarts; supports standard macOS hardware media keys (`F7`/`F8`/`F9`, AirPods/Bluetooth, Control Center Now Playing); and detects active calls/meetings (WhatsApp, Messenger, Teams, Google Meet, Zoom, FaceTime) via zero-permission CoreAudio input monitoring to auto-pause and auto-resume playback.
+- **Borderless Floating Winamp Mini Player (`EchoAmp Mini`):** Toggle open/hidden via the **`MINI`** button in the player bar or `⌘⇧M`:
+  - Crisp phosphor LCD clock (click to toggle elapsed vs. remaining time)
   - Live **16-band segmented spectrum analyzer** with falling peak-hold LEDs driven by real `AVAudioPlayer` channel metering
-  - `KBPS` / `KHZ` / `STEREO` telemetry strip and beveled transport controls (`⏮ ▶ ❚❚ ■ ⏭ ⏏`)
+  - `KBPS` / `KHZ` / `STEREO` telemetry strip, beveled transport controls (`⏮ ▶ ❚❚ ■ ⏭ ⏏` — where `⏏` toggles hiding/showing the main My Echo window) above the volume slider row
   - **Always-on-Top** floating pin, ultra-slim **Windowshade** mode, classic Winamp 99 vs. active theme skin toggle
-  - Expandable, **freely height-resizable Winamp `PL` Queue drawer** (`300px` minimum height up to full screen) with drag-and-drop support
+  - Expandable, **freely height-resizable Winamp `PL` Queue drawer** (`300px` minimum height up to full screen) with drag-and-drop and keyboard `Delete` support
 
 ### 9. 90s Neon Retro UI & 5 Live Themes
 Crisp **≤ 8px** corner geometry, icon-first controls backed by descriptive tooltips, and 5 instant-switch themes in **Settings (`⌘,`)**:
@@ -215,6 +256,11 @@ Crisp **≤ 8px** corner geometry, icon-first controls backed by descriptive too
 3. **Disc Metallic** — FiiO / Snowsky Disc (brushed dark titanium, prismatic CD cyan, OLED amber)
 4. **Winamp 99 Classic** — 1999 Winamp 2.x (gunmetal chassis, pure black LCD, phosphor `#00FF41` green & VU yellow/orange)
 5. **Frosted Glass** — Translucent macOS smoked glass (`NSVisualEffectView` behind-window vibrancy, specular ice rims, prism aqua & crystal cassette logo)
+
+### 10. Party Mode Jukebox (`⌘⇧P`) — Collaborative LAN Web Server & DJ Voice Intros
+- **Locked `Partymode` Queue & Live Schedule:** Dedicated party playlist with live `HH:mm` planned play times, host quick-add, and protection against accidental playback interruptions.
+- **QR Code Guest Web App:** Instant zero-install desktop and mobile browser UI on your Wi-Fi network (editable/random port) with full-library multi-field search (`artist:`, `track:`, `+req`, `-excl`), A–Z / New / Shuffle browsing, active user presence, **Party Chat**, and **Listen-Along** audio streaming.
+- **Broadcast-Processed Voice Intros:** Guests can record short DJ intros from their phone (via an automatic companion local HTTPS/TLS listener) that are EQ'd, compressed, normalized, and ducked smoothly over the start of their requested song.
 
 ---
 
@@ -228,7 +274,7 @@ Crisp **≤ 8px** corner geometry, icon-first controls backed by descriptive too
 ## Building, Running & Testing
 
 ```bash
-# Run the unit test suite (14 tests in EchoCoreTests)
+# Run the unit test suite (34 tests in EchoCoreTests)
 swift test
 
 # Build the release macOS .app bundle with custom 90s Neon Cassette AppIcon.icns
@@ -252,7 +298,8 @@ You can also open `Package.swift` directly in Xcode to build, run, or debug.
 | `⌘,` | Open Settings & Themes |
 | `⌘P` | Play / Pause |
 | `⌘→` / `⌘←` | Next / Previous Track |
-| `⌘⇧M` | Open Floating Winamp Mini Player |
+| `⌘⇧P` | Start / Exit Party Mode Jukebox |
+| `⌘⇧M` | Show / Hide Floating Winamp Mini Player |
 
 ---
 
@@ -265,7 +312,8 @@ Echo/
 ├── Sources/
 │   ├── EchoCore/                                      # Pure-Swift core engine (UI-independent, unit-tested)
 │   │   ├── Models/
-│   │   │   ├── LibraryModels.swift                    # AudioFormat, LibrarySource, Track, AlbumGroup, ArtistGroup, Playlist
+│   │   │   ├── LibraryModels.swift                    # AudioFormat, LibrarySource, Track, AlbumGroup, ArtistGroup, Playlist, Ratings
+│   │   │   ├── SearchQueryParser.swift                # Structured multi-field search parser (artist:, track:, album:, rating:, +/-)
 │   │   │   ├── DeviceModels.swift                     # DestinationMode, DevicePresetKind, DeviceProfile, SyncMode, M3U styles
 │   │   │   └── PodcastModels.swift                    # PodcastDirectory, PodcastShow (episodesToKeep), PodcastEpisode
 │   │   ├── Metadata/
@@ -273,33 +321,39 @@ Echo/
 │   │   │   └── ArtworkCache.swift                     # Content-hashed artwork cache + sRGB Baseline JPEG converter/validator
 │   │   ├── Indexing/
 │   │   │   └── LibraryIndexer.swift                   # Incremental local & NAS scanner
+│   │   ├── Party/
+│   │   │   ├── PartyModeServer.swift                  # Embedded LAN HTTP/HTTPS server, live queue API, chat, stream & voice intros
+│   │   │   └── PartyModeWebUI.swift                   # Responsive dark-neon desktop & mobile guest web jukebox
 │   │   ├── Podcasts/
 │   │   │   └── PodcastService.swift                   # Apple + gPodder search, RSS 2.0 XML parser, OPML parser, downloader
 │   │   ├── Persistence/
 │   │   │   └── EchoDatabase.swift                     # Native SQLite3 WAL-mode store
 │   │   ├── Playback/
-│   │   │   └── AudioPlayerEngine.swift                # Queue, shuffle, repeat, and 16-band real-time audio metering
+│   │   │   └── AudioPlayerEngine.swift                # Queue, output routing, call auto-pause, voice-intro ducking & 16-band metering
 │   │   └── Sync/
 │   │       ├── PathFormatter.swift                    # FAT32/NFC sanitization, ARTIST/ALBUM/TRACK, Podcasts, M3U/M3U8
 │   │       ├── AudioFileCopyOptimizer.swift           # xattr-free copy + safe FLAC PICTURE & MP3 ID3v2.3 rewrite
 │   │       ├── SyncEngine.swift                       # SyncPlanner, SyncEngine, DeviceSyncManifest, POSIX ._* cleaner
+│   │       ├── WirelessSyncServer.swift               # Bonjour + HTTP Wi-Fi iOS sync server & Lidarr/podcast relay
 │   │       └── VolumeMonitor.swift                    # Removable volume detection & Clean-and-Eject
 │   └── EchoApp/                                       # Native macOS SwiftUI interface
 │       ├── EchoApp.swift                              # Main Studio & Winamp Mini Player scenes + menu commands
-│       ├── State/EchoStore.swift                      # Central @Observable state, drag-and-drop & multi-destination logic
-│       ├── Theme/Theme.swift                          # 4 live themes + vector Cassette, Nano, Disc & Winamp logos
+│       ├── State/EchoStore.swift                      # Central @Observable state, Party Mode, ratings, drag-and-drop & sync
+│       ├── Theme/Theme.swift                          # 5 live themes + vector Cassette, Nano, Disc & Winamp logos
 │       └── Views/
-│           ├── MainContentView.swift                  # Top bar, library scope picker, GlobalSearchResultsView
-│           ├── SidebarView.swift                      # Library nav, scope switcher, drop-enabled playlists & device cards
+│           ├── MainContentView.swift                  # Top bar, library scope picker, star filter, GlobalSearchResultsView
+│           ├── SidebarView.swift                      # Library nav, Party Mode row, scope switcher, drop-enabled playlists & devices
 │           ├── LibraryViews.swift                     # Home, Artists, Albums, Tracks, PlaylistDetail, Sources & NAS
+│           ├── PartyModeView.swift                    # Party Mode host control center, Settings lightbox, QR code, chat & quick add
 │           ├── PodcastsView.swift                     # Multi-directory search, categories, OPML, show/episode views
 │           ├── DeviceSyncView.swift                   # FiiO telemetry, preset config, pre-sync diff & live progress
-│           ├── SettingsView.swift                     # Single/Multi-Destination mode, theme gallery, destination memory
-│           ├── PlayerBarView.swift                    # Persistent bottom playback bar & queue popover
+│           ├── SettingsView.swift                     # Single/Multi-Destination mode, call auto-pause, Lidarr & themes
+│           ├── PlayerBarView.swift                    # Persistent bottom playback bar, output device picker & queue popover
 │           ├── WinampMiniPlayerView.swift             # Floating resizable Winamp Mini Player with live spectrum & PL drawer
-│           └── SharedComponents.swift                 # Artwork, destination badges, format badges, draggable TrackRowView
+│           └── SharedComponents.swift                 # Artwork, star ratings, destination/format badges, draggable TrackRowView
+├── iOS/                                               # Universal iPhone & iPad companion app (MyEchoiOS)
 └── Tests/
-    └── EchoCoreTests/EchoCoreTests.swift              # 14 unit tests covering metadata, artwork, sync, podcasts & SQLite
+    └── EchoCoreTests/EchoCoreTests.swift              # 34 unit tests covering metadata, artwork, sync, Party Mode, ratings & SQLite
 ```
 
 ---
