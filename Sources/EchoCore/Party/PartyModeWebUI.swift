@@ -665,7 +665,24 @@ public enum PartyModeWebUI {
             border-color: var(--mint);
             box-shadow: 0 0 0 3px rgba(20, 241, 149, 0.14);
           }
-          .search-icon { color: var(--mint); font-size: 16px; flex-shrink: 0; }
+          .search-icon { color: var(--mint); display: inline-flex; align-items: center; flex-shrink: 0; }
+          .flat-ico {
+            width: 13px;
+            height: 13px;
+            flex-shrink: 0;
+            display: inline-block;
+            stroke: currentColor;
+            fill: none;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+          }
+          .flat-ico.sm { width: 11.5px; height: 11.5px; }
+          .flat-ico.lg { width: 15px; height: 15px; }
+          .np-kicker { display: inline-flex; align-items: center; gap: 4px; }
+          .np-info-hint { display: inline-flex; align-items: center; gap: 3px; }
+          .modal h3 { display: inline-flex; align-items: center; gap: 7px; }
+          .btn-sec, .rec-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
           .search-input {
             width: 100%;
             height: 100%;
@@ -1072,6 +1089,9 @@ public enum PartyModeWebUI {
           .toast.error { border-color: rgba(255, 148, 46, 0.8); color: var(--amber); }
           .toast-action {
             appearance: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
             border: 1px solid rgba(255, 46, 151, 0.72);
             background: rgba(255, 46, 151, 0.18);
             color: var(--magenta);
@@ -1087,6 +1107,9 @@ public enum PartyModeWebUI {
           /* Voice Intro Badges & Recorder Modal */
           .q-intro-btn {
             appearance: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
             font-size: 10px;
             font-weight: 800;
@@ -1106,6 +1129,9 @@ public enum PartyModeWebUI {
             color: #fff;
           }
           .q-intro-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
             font-size: 9.5px;
             font-weight: 800;
@@ -1500,14 +1526,14 @@ public enum PartyModeWebUI {
                     <div class="np-meta">
                       <div class="np-kicker-row">
                         <div class="np-kicker" id="npKicker">WAITING FOR TRACKS</div>
-                        <span class="np-info-hint">ⓘ Info</span>
+                        <span class="np-info-hint"><svg class="flat-ico sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>Info</span>
                       </div>
                       <div class="np-title" id="npTitle">Search below to queue the first song</div>
                       <div class="np-sub" id="npSub">Locked to Partymode playlist</div>
                     </div>
                   </div>
                   <div class="np-actions">
-                    <button class="np-stream-btn" id="streamToggleBtn" type="button" title="Stream live audio from Partymode on this device">🎧 Listen</button>
+                    <button class="np-stream-btn" id="streamToggleBtn" type="button" title="Stream live audio from Partymode on this device"><svg class="flat-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg><span>Listen</span></button>
                     <button class="np-count" id="npQueueJump" type="button">0 in queue</button>
                   </div>
                   <div class="np-progress"><div class="np-progress-fill" id="npProgressFill"></div></div>
@@ -1526,7 +1552,7 @@ public enum PartyModeWebUI {
               <section class="pane-search" id="paneSearch">
                 <div class="search-card">
                   <div class="search-box">
-                    <span class="search-icon" aria-hidden="true">&#128269;</span>
+                    <span class="search-icon" aria-hidden="true"><svg class="flat-ico lg" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
                     <input
                       id="searchInput"
                       class="search-input"
@@ -1637,8 +1663,8 @@ public enum PartyModeWebUI {
                 </div>
               </div>
               <div class="lb-foot">
-                <button class="btn-sec" id="lbSearchArtistBtn" type="button">🔍 More by Artist</button>
-                <button class="btn-sec" id="lbSearchAlbumBtn" type="button">💿 Tracks on Album</button>
+                <button class="btn-sec" id="lbSearchArtistBtn" type="button"><svg class="flat-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><span>More by Artist</span></button>
+                <button class="btn-sec" id="lbSearchAlbumBtn" type="button"><svg class="flat-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/></svg><span>Tracks on Album</span></button>
                 <button class="btn-pri" id="lbDoneBtn" type="button">Close</button>
               </div>
             </div>
@@ -1658,7 +1684,7 @@ public enum PartyModeWebUI {
 
           <div class="modal-backdrop" id="introModal">
             <div class="modal">
-              <h3>🎙 Record Voice Intro</h3>
+              <h3><svg class="flat-ico lg" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg><span>Record Voice Intro</span></h3>
               <p id="introRulesText">Music fades to 40% during your intro, with the last 5s overlapping your song.</p>
               <div class="intro-track-box">
                 <div class="intro-track-title" id="introTrackTitle">Track</div>
@@ -1672,9 +1698,9 @@ public enum PartyModeWebUI {
                 <div class="intro-bar-track"><div class="intro-bar-fill" id="introProgressFill"></div></div>
                 <div class="intro-meter-track" id="introMeterWrap"><div class="intro-meter-fill" id="introMeterFill"></div></div>
                 <button class="rec-btn" id="introRecBtn" type="button">● Start Recording</button>
-                <button class="rec-btn" id="introHttpsBtn" type="button" style="display:none;">🎙 Enable Live Mic (HTTPS)</button>
+                <button class="rec-btn" id="introHttpsBtn" type="button" style="display:none;"><svg class="flat-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg><span>Enable Live Mic (HTTPS)</span></button>
                 <label class="btn-sec" id="introFileLabel" style="display:none;text-align:center;width:100%;padding:10px 12px;">
-                  📁 Attach Voice Memo / Audio File
+                  <svg class="flat-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span>Attach Voice Memo / Audio File</span>
                   <input id="introFileInput" type="file" accept="audio/*" style="display:none;" />
                 </label>
                 <div class="intro-hint" id="introStatusHint"></div>
@@ -1848,7 +1874,21 @@ public enum PartyModeWebUI {
             return m + ':' + String(s).padStart(2, '0');
           }
 
-          function showToast(msg, isError, actionLabel, actionFn) {
+          const FLAT_ICONS = {
+            mic: '<svg class="flat-ico sm" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>',
+            headphones: '<svg class="flat-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>',
+            volume: '<svg class="flat-ico" viewBox="0 0 24 24" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>',
+            pause: '<svg class="flat-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>'
+          };
+
+          function setIconLabel(el, iconHtml, labelText) {
+            el.innerHTML = iconHtml;
+            const span = document.createElement('span');
+            span.textContent = labelText;
+            el.appendChild(span);
+          }
+
+          function showToast(msg, isError, actionLabel, actionFn, actionIconHtml) {
             els.toast.innerHTML = '';
             const span = document.createElement('span');
             span.textContent = msg;
@@ -1857,7 +1897,11 @@ public enum PartyModeWebUI {
               const btn = document.createElement('button');
               btn.type = 'button';
               btn.className = 'toast-action';
-              btn.textContent = actionLabel;
+              if (actionIconHtml) {
+                setIconLabel(btn, actionIconHtml, actionLabel);
+              } else {
+                btn.textContent = actionLabel;
+              }
               btn.addEventListener('click', () => {
                 els.toast.classList.remove('show');
                 actionFn();
@@ -1970,7 +2014,7 @@ public enum PartyModeWebUI {
                 }
               }
               if (ps.isPlayingVoiceIntro) {
-                els.npKicker.textContent = '🎙 VOICE INTRO LIVE';
+                setIconLabel(els.npKicker, FLAT_ICONS.mic, 'VOICE INTRO LIVE');
                 els.npKicker.classList.add('intro-live');
               } else {
                 els.npKicker.textContent = ps.isPlaying ? 'NOW PLAYING' : 'PAUSED · PARTYMODE';
@@ -2048,7 +2092,7 @@ public enum PartyModeWebUI {
                   introBtn.type = 'button';
                   introBtn.className = 'q-intro-btn' + (entry.hasVoiceIntro ? ' recorded' : '');
                   const sec = Math.max(1, Math.round(entry.voiceIntroDuration || 1));
-                  introBtn.textContent = entry.hasVoiceIntro ? ('🎙 ' + sec + 's') : '🎙 Intro';
+                  setIconLabel(introBtn, FLAT_ICONS.mic, entry.hasVoiceIntro ? (sec + 's') : 'Intro');
                   introBtn.title = entry.hasVoiceIntro ? 'Edit or remove your voice intro' : 'Record a voice intro for this track';
                   introBtn.addEventListener('click', () => openIntroModal(entry.track, Boolean(entry.hasVoiceIntro), entry.voiceIntroDuration));
                   row.appendChild(introBtn);
@@ -2056,7 +2100,7 @@ public enum PartyModeWebUI {
                   const introTag = document.createElement('span');
                   introTag.className = 'q-intro-badge';
                   const sec = Math.max(1, Math.round(entry.voiceIntroDuration || 1));
-                  introTag.textContent = '🎙 ' + sec + 's';
+                  setIconLabel(introTag, FLAT_ICONS.mic, sec + 's');
                   introTag.title = 'Voice intro queued';
                   row.appendChild(introTag);
                 }
@@ -2091,7 +2135,7 @@ public enum PartyModeWebUI {
               els.partyAudio.load();
             } catch (_) {}
             els.streamToggleBtn.classList.remove('live');
-            els.streamToggleBtn.textContent = '🎧 Listen';
+            setIconLabel(els.streamToggleBtn, FLAT_ICONS.headphones, 'Listen');
             if (!silent) showToast('Listen-Along stream stopped', false);
           }
 
@@ -2107,7 +2151,7 @@ public enum PartyModeWebUI {
             const trackId = ps.currentTrackID || null;
             if (!trackId) {
               els.partyAudio.pause();
-              els.streamToggleBtn.textContent = '🔊 Waiting';
+              setIconLabel(els.streamToggleBtn, FLAT_ICONS.volume, 'Waiting');
               return;
             }
 
@@ -2136,7 +2180,11 @@ public enum PartyModeWebUI {
               }
             }
             els.streamToggleBtn.classList.add('live');
-            els.streamToggleBtn.textContent = ps.isPlaying ? '🔊 Live' : '⏸ Synced';
+            if (ps.isPlaying) {
+              setIconLabel(els.streamToggleBtn, FLAT_ICONS.volume, 'Live');
+            } else {
+              setIconLabel(els.streamToggleBtn, FLAT_ICONS.pause, 'Synced');
+            }
           }
 
           els.partyAudio.addEventListener('loadedmetadata', () => {
@@ -2157,7 +2205,7 @@ public enum PartyModeWebUI {
             } else {
               state.listening = true;
               els.streamToggleBtn.classList.add('live');
-              els.streamToggleBtn.textContent = '🔊 Syncing...';
+              setIconLabel(els.streamToggleBtn, FLAT_ICONS.volume, 'Syncing...');
               showToast('Listen-Along stream active', false);
               if (state.partyState) {
                 syncListenAlongStream(state.partyState);
@@ -2448,8 +2496,9 @@ public enum PartyModeWebUI {
                   showToast(
                     data.message || ('Added "' + track.title + '"'),
                     false,
-                    '🎙 Record Intro',
-                    () => openIntroModal(track, false, null)
+                    'Record Intro',
+                    () => openIntroModal(track, false, null),
+                    FLAT_ICONS.mic
                   );
                 } else {
                   showToast(data.message || ('Added "' + track.title + '" to Partymode'), false);
