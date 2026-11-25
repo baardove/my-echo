@@ -50,11 +50,37 @@ Whether you just want a clean offline MP3 player sync tool or a full homelab aud
 
 ## Screenshots
 
-### Albums Grid · Echo Cassette Theme & Multi-Destination Sidebar
-![My Echo Albums Grid](docs/screenshots/albums-echo-cassette.jpg)
+### Home Dashboard · New Arrivals, New Releases & Multi-Destination Sidebar
+![My Echo Home Dashboard](docs/screenshots/home-library-overview.jpg)
 
-### Album Detail · Dynamic Artwork Glow, `ARTIST/ALBUM/TRACK` Path Preview & Playback Bar
-![My Echo Album Detail — Abbey Road](docs/screenshots/album-detail-abbey-road.jpg)
+### Album Detail · Right-Side Album & Artist Notes, `ARTIST/ALBUM/TRACK` Path Preview & Playback Bar
+![My Echo Album Detail](docs/screenshots/album-detail-editorial.jpg)
+
+### Album Artwork Lightbox · Full-Resolution Cover, Audio Specs & Local SQLite Editorial Cache
+<table>
+  <tr>
+    <td><img src="docs/screenshots/album-lightbox-diving-board.jpg" alt="My Echo Album Lightbox — The Diving Board" /></td>
+    <td><img src="docs/screenshots/album-lightbox-kesha.jpg" alt="My Echo Album Lightbox — Artist & Album Notes" /></td>
+  </tr>
+</table>
+
+### Artist Detail & Playlists · Popularity Meters, Artist Bios & Multi-Destination Sync Badges
+<table>
+  <tr>
+    <td><img src="docs/screenshots/artist-detail-popular.jpg" alt="My Echo Artist Detail — Popular Tracks & Bio" /></td>
+    <td><img src="docs/screenshots/playlist-multi-destination.jpg" alt="My Echo Playlist Detail — Multi-Destination Sync" /></td>
+  </tr>
+</table>
+
+### Podcasts · Multi-Directory Search, 18 Genres, Single-Episode Downloads & Per-Show `KEEP N` Rotation
+<table>
+  <tr>
+    <td><img src="docs/screenshots/podcasts-directory-search.jpg" alt="My Echo Podcast Directory & Genre Search" /></td>
+    <td><img src="docs/screenshots/podcasts-episode-preview.png" alt="My Echo Podcast Episode Preview & Single-Episode Sync" /></td>
+  </tr>
+</table>
+
+![My Echo Subscribed Podcasts Grid](docs/screenshots/podcasts-subscribed-grid.png)
 
 ### Floating Winamp-Style Mini Player (`⌘⇧M`) · Live 16-Band Spectrum & Resizable `PL` Drawer
 <p align="center">
