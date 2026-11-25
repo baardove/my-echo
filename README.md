@@ -82,10 +82,14 @@ Whether you just want a clean offline MP3 player sync tool or a full homelab aud
 
 ![My Echo Subscribed Podcasts Grid](docs/screenshots/podcasts-subscribed-grid.png)
 
-### Floating Winamp-Style Mini Player (`⌘⇧M`) · Live 16-Band Spectrum & Resizable `PL` Drawer
-<p align="center">
-  <img src="docs/screenshots/mini-player-winamp.png" alt="My Echo Winamp Mini Player" width="420" />
-</p>
+### Floating Winamp-Style Mini Player (`⌘⇧M`), Equal-Power Crossfade & Live Play Queue
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/mini-player-winamp.png" alt="My Echo Winamp Mini Player" width="320" /></td>
+    <td align="center"><img src="docs/screenshots/player-crossfade-popover.png" alt="My Echo Equal-Power Crossfade Control" width="260" /></td>
+    <td align="center"><img src="docs/screenshots/player-queue-popover.png" alt="My Echo Live Play Queue" width="260" /></td>
+  </tr>
+</table>
 
 ---
 
