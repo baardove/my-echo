@@ -8,6 +8,7 @@ struct PartyModeView: View {
     @Environment(EchoStore.self) private var store
     @State private var quickSearchQuery: String = ""
     @State private var isDropTargeted: Bool = false
+    @State private var showPartySettingsLightbox: Bool = false
     @State private var isEditingPort: Bool = false
     @State private var portDraft: String = ""
     @State private var hostChatDraft: String = ""
@@ -28,40 +29,68 @@ struct PartyModeView: View {
             : nil
         let plannedTimes = store.plannedPlayTimesForPartymode()
 
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                heroControlCard(playlist: playlist, trackCount: partyTracks.count)
+        ZStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    heroControlCard(playlist: playlist, trackCount: partyTracks.count)
 
-                HStack(alignment: .top, spacing: 20) {
-                    // Left: Live Dynamic "Partymode" Playlist Queue
-                    livePartymodeQueueCard(
-                        playlist: playlist,
-                        tracks: partyTracks,
-                        currentIndex: currentIndex,
-                        plannedTimes: plannedTimes
-                    )
-                    .frame(maxWidth: .infinity)
+                    HStack(alignment: .top, spacing: 20) {
+                        // Left: Live Dynamic "Partymode" Playlist Queue
+                        livePartymodeQueueCard(
+                            playlist: playlist,
+                            tracks: partyTracks,
+                            currentIndex: currentIndex,
+                            plannedTimes: plannedTimes
+                        )
+                        .frame(maxWidth: .infinity)
 
-                    // Right: Activated Guests, Optional Chat, Quick Add & Activity Feed
-                    VStack(spacing: 16) {
-                        activatedGuestsCard
-                        if store.partyChatEnabled {
-                            partyChatCard
+                        // Right: Activated Guests, Optional Chat, Quick Add & Activity Feed
+                        VStack(spacing: 16) {
+                            activatedGuestsCard
+                            if store.partyChatEnabled {
+                                partyChatCard
+                            }
+                            quickTrackSearchCard
+                            guestActivityCard
                         }
-                        quickTrackSearchCard
-                        guestActivityCard
+                        .frame(width: 350)
                     }
-                    .frame(width: 350)
                 }
+                .padding(26)
             }
-            .padding(26)
+
+            if showPartySettingsLightbox {
+                partySettingsLightbox
+                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                    .zIndex(50)
+            }
+        }
+        .animation(.easeOut(duration: 0.16), value: showPartySettingsLightbox)
+        .onKeyPress(.escape) {
+            if showPartySettingsLightbox {
+                showPartySettingsLightbox = false
+                isEditingPort = false
+                return .handled
+            }
+            return .ignored
         }
     }
 
     // MARK: - Hero Control Card (Start/Stop, Random/Custom Port URL, QR Code, Host Toggles)
 
+    private func openPartySettings(focusPort: Bool = false) {
+        if let pref = store.partyPreferredPort {
+            portDraft = String(pref)
+        } else if store.partyServerPort > 0 {
+            portDraft = String(store.partyServerPort)
+        } else {
+            portDraft = String(EchoStore.defaultPartyPort)
+        }
+        isEditingPort = focusPort
+        showPartySettingsLightbox = true
+    }
+
     private func heroControlCard(playlist: Playlist?, trackCount: Int) -> some View {
-        @Bindable var bindableStore = store
         let isLive = store.isPartyModeEnabled
         let accent = isLive ? EchoTheme.neoMagenta : EchoTheme.neoMint
         let playingTrack = isLive ? store.player.currentTrack : nil
@@ -100,8 +129,7 @@ struct PartyModeView: View {
                             .foregroundStyle(isLive ? EchoTheme.neoMint : EchoTheme.textMuted)
                         if isLive && store.partyServerPort > 0 {
                             Button {
-                                portDraft = String(store.partyServerPort)
-                                isEditingPort = true
+                                openPartySettings(focusPort: true)
                             } label: {
                                 HStack(spacing: 4) {
                                     Text("PORT \(String(store.partyServerPort))")
@@ -116,11 +144,10 @@ struct PartyModeView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 4))
                             }
                             .buttonStyle(.plain)
-                            .help("Click to edit the Party Mode web server port.")
+                            .help("Click to open Party Mode settings and edit the web server port.")
                         } else if let preferred = store.partyPreferredPort {
                             Button {
-                                portDraft = String(preferred)
-                                isEditingPort = true
+                                openPartySettings(focusPort: true)
                             } label: {
                                 HStack(spacing: 4) {
                                     Text("PORT \(String(preferred))")
@@ -135,7 +162,7 @@ struct PartyModeView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 4))
                             }
                             .buttonStyle(.plain)
-                            .help("Custom port configured for next Party Mode launch. Click to edit or reset to Random.")
+                            .help("Custom port configured for next Party Mode launch. Click to edit in Party Mode settings.")
                         }
                     }
 
@@ -146,7 +173,18 @@ struct PartyModeView: View {
 
                 Spacer(minLength: 12)
 
-                VStack(alignment: .trailing, spacing: 8) {
+                HStack(spacing: 10) {
+                    NeoSecondaryButton(title: "Settings", icon: "gearshape.fill") {
+                        openPartySettings(focusPort: false)
+                    }
+                    .help("Party Mode Settings: Auto-play, re-requests, Party Chat, Listen-Along Stream, server port, and max voice intro length.")
+
+                    if let pl = playlist {
+                        NeoSecondaryButton(title: "Open Playlist View", icon: "music.note.list") {
+                            store.navigate(to: .playlist(pl.id))
+                        }
+                    }
+
                     if isLive {
                         Button {
                             store.stopPartyMode()
@@ -360,208 +398,6 @@ struct PartyModeView: View {
                         .strokeBorder(EchoTheme.neoMint.opacity(0.35), lineWidth: 1)
                 )
             }
-
-            // Host Behavior Toggles & Port Editor (2 clean rows so no toggle clips on compact widths)
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 18) {
-                    Toggle(isOn: $bindableStore.partyAutoPlayOnRequest) {
-                        Text("Auto-play on request")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(EchoTheme.textSecondary)
-                    }
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .tint(EchoTheme.neoMint)
-
-                    Toggle(isOn: $bindableStore.partyAllowReRequestPlayed) {
-                        Text("Allow re-request played")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(EchoTheme.textSecondary)
-                    }
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .tint(EchoTheme.neoCyan)
-                    .onChange(of: store.partyAllowReRequestPlayed) { _, _ in
-                        store.pushPartyModeStateToServer()
-                    }
-
-                    Toggle(isOn: Binding(
-                        get: { store.partyChatEnabled },
-                        set: { store.setPartyChatEnabled($0) }
-                    )) {
-                        Text("Party Chat")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(EchoTheme.textSecondary)
-                    }
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .tint(EchoTheme.neoMagenta)
-
-                    Toggle(isOn: Binding(
-                        get: { store.partyStreamingEnabled },
-                        set: { store.setPartyStreamingEnabled($0) }
-                    )) {
-                        Text("Listen-Along Stream")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(EchoTheme.textSecondary)
-                    }
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .tint(EchoTheme.neoMint)
-                    .help("Allow remote guests on the Party Mode web page to stream and listen along in sync with Partymode.")
-
-                    Spacer(minLength: 0)
-                }
-
-                HStack(spacing: 10) {
-                    // Inline Port Editor (supports custom port 1024–65535 or Random)
-                    if isEditingPort {
-                        HStack(spacing: 6) {
-                            Text("PORT")
-                                .font(.system(size: 9.5, weight: .black, design: .monospaced))
-                                .foregroundStyle(EchoTheme.neoCyan)
-                            TextField("53333", text: $portDraft)
-                                .textFieldStyle(.plain)
-                                .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                .foregroundStyle(EchoTheme.textPrimary)
-                                .frame(width: 74)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 4)
-                                .background(EchoTheme.surfaceElevated)
-                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
-                                .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(EchoTheme.neoCyan.opacity(0.7), lineWidth: 1))
-                                .onSubmit {
-                                    if store.setPartyPort(portDraft) {
-                                        isEditingPort = false
-                                    }
-                                }
-
-                            Button("Apply") {
-                                if store.setPartyPort(portDraft) {
-                                    isEditingPort = false
-                                }
-                            }
-                            .font(.system(size: 11, weight: .bold))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(EchoTheme.neoMint.opacity(0.20))
-                            .foregroundStyle(EchoTheme.neoMint)
-                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
-                            .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(EchoTheme.neoMint.opacity(0.6), lineWidth: 1))
-                            .buttonStyle(.plain)
-
-                            Button("Default") {
-                                portDraft = String(EchoStore.defaultPartyPort)
-                                _ = store.setPartyPort("")
-                                isEditingPort = false
-                            }
-                            .font(.system(size: 11, weight: .semibold))
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 4)
-                            .background(EchoTheme.surfaceElevated)
-                            .foregroundStyle(EchoTheme.textSecondary)
-                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
-                            .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(EchoTheme.border, lineWidth: 1))
-                            .buttonStyle(.plain)
-                            .help("Reset to default Party Mode port 53333.")
-
-                            Button {
-                                isEditingPort = false
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(EchoTheme.textMuted)
-                                    .frame(width: 22, height: 22)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.black.opacity(0.32))
-                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
-                        .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.neoCyan.opacity(0.45), lineWidth: 1))
-                    } else {
-                        NeoSecondaryButton(
-                            title: store.partyServerPort > 0
-                                ? "Edit Port (\(String(store.partyServerPort)))"
-                                : (store.partyPreferredPort.map { "Edit Port (\(String($0)))" } ?? "Edit Port (Random)"),
-                            icon: "network",
-                            accent: EchoTheme.neoCyan
-                        ) {
-                            if let pref = store.partyPreferredPort {
-                                portDraft = String(pref)
-                            } else if store.partyServerPort > 0 {
-                                portDraft = String(store.partyServerPort)
-                            } else {
-                                portDraft = ""
-                            }
-                            isEditingPort = true
-                        }
-                        .help("Set a custom port (1024–65535) for the Party Mode web server, or leave blank for default 53333.")
-                    }
-
-                    if isLive {
-                        NeoSecondaryButton(title: "New Random Port", icon: "arrow.triangle.2.circlepath", accent: EchoTheme.neoCyan) {
-                            store.restartPartyServerOnNewPort()
-                        }
-                        .help("Restart the guest web server on a fresh random port.")
-                    }
-
-                    // Host-adjustable Max Voice Intro Duration (default 15s, range 5s–60s)
-                    HStack(spacing: 6) {
-                        Image(systemName: "mic.fill")
-                            .font(.system(size: 10.5, weight: .bold))
-                            .foregroundStyle(EchoTheme.neoMagenta)
-                        Text("MAX INTRO")
-                            .font(.system(size: 9.5, weight: .black, design: .monospaced))
-                            .foregroundStyle(EchoTheme.textMuted)
-                        Button {
-                            store.setPartyMaxIntroSeconds(store.partyMaxIntroSeconds - 5)
-                        } label: {
-                            Image(systemName: "minus")
-                                .font(.system(size: 9.5, weight: .bold))
-                                .frame(width: 20, height: 20)
-                                .background(EchoTheme.surfaceElevated)
-                                .foregroundStyle(EchoTheme.textPrimary)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(store.partyMaxIntroSeconds <= 5)
-
-                        Text("\(store.partyMaxIntroSeconds)s")
-                            .font(.system(size: 11.5, weight: .black, design: .monospaced))
-                            .foregroundStyle(EchoTheme.neoMagenta)
-                            .frame(minWidth: 28)
-
-                        Button {
-                            store.setPartyMaxIntroSeconds(store.partyMaxIntroSeconds + 5)
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.system(size: 9.5, weight: .bold))
-                                .frame(width: 20, height: 20)
-                                .background(EchoTheme.surfaceElevated)
-                                .foregroundStyle(EchoTheme.textPrimary)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(store.partyMaxIntroSeconds >= 60)
-                    }
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4.5)
-                    .background(EchoTheme.surfaceElevated.opacity(0.65))
-                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
-                    .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.neoMagenta.opacity(0.45), lineWidth: 1))
-                    .help("Maximum duration guests can record for a song intro (ducks previous & next song to 40% with last 5s overlapping the new song).")
-
-                    Spacer()
-
-                    if let pl = playlist {
-                        NeoSecondaryButton(title: "Open Playlist View", icon: "music.note.list") {
-                            store.navigate(to: .playlist(pl.id))
-                        }
-                    }
-                }
-            }
         }
         .padding(20)
         .background(
@@ -579,6 +415,304 @@ struct PartyModeView: View {
         .overlay(
             RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous)
                 .strokeBorder(isLive ? accent.opacity(0.55) : EchoTheme.borderStrong, lineWidth: 1)
+        )
+    }
+
+    // MARK: - Party Mode Settings Lightbox
+
+    private var partySettingsLightbox: some View {
+        @Bindable var bindableStore = store
+        let isLive = store.isPartyModeEnabled
+
+        return ZStack {
+            Color.black.opacity(0.78)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    showPartySettingsLightbox = false
+                    isEditingPort = false
+                }
+
+            VStack(alignment: .leading, spacing: 18) {
+                // Header
+                HStack(alignment: .center) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "gearshape.fill")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(EchoTheme.neoCyan)
+                            .frame(width: 32, height: 32)
+                            .background(EchoTheme.neoCyan.opacity(0.16))
+                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("PARTY MODE SETTINGS")
+                                .font(.system(size: 9.5, weight: .black, design: .monospaced))
+                                .tracking(1.3)
+                                .foregroundStyle(EchoTheme.neoCyan)
+                            Text("Partymode Jukebox Controls")
+                                .font(.system(size: 18, weight: .black, design: .rounded))
+                                .foregroundStyle(EchoTheme.textPrimary)
+                        }
+                    }
+
+                    Spacer()
+
+                    Button {
+                        showPartySettingsLightbox = false
+                        isEditingPort = false
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12, weight: .bold))
+                            .frame(width: 28, height: 28)
+                            .background(EchoTheme.surfaceElevated)
+                            .foregroundStyle(EchoTheme.textSecondary)
+                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Close Party Mode Settings (Esc)")
+                }
+
+                Divider().overlay(EchoTheme.border)
+
+                // Behavior Switches
+                VStack(spacing: 10) {
+                    partySettingToggleRow(
+                        title: "Auto-play on request",
+                        subtitle: "Start playing automatically when a guest queues a track while idle.",
+                        isOn: $bindableStore.partyAutoPlayOnRequest,
+                        tint: EchoTheme.neoMint
+                    )
+
+                    partySettingToggleRow(
+                        title: "Allow re-request played",
+                        subtitle: "Let guests queue songs that were already played earlier in the party.",
+                        isOn: $bindableStore.partyAllowReRequestPlayed,
+                        tint: EchoTheme.neoCyan
+                    )
+                    .onChange(of: store.partyAllowReRequestPlayed) { _, _ in
+                        store.pushPartyModeStateToServer()
+                    }
+
+                    partySettingToggleRow(
+                        title: "Party Chat",
+                        subtitle: "Enable live chat between guests and host on the web jukebox.",
+                        isOn: Binding(
+                            get: { store.partyChatEnabled },
+                            set: { store.setPartyChatEnabled($0) }
+                        ),
+                        tint: EchoTheme.neoMagenta
+                    )
+
+                    partySettingToggleRow(
+                        title: "Listen-Along Stream",
+                        subtitle: "Allow remote guests on the web page to stream and listen along in sync.",
+                        isOn: Binding(
+                            get: { store.partyStreamingEnabled },
+                            set: { store.setPartyStreamingEnabled($0) }
+                        ),
+                        tint: EchoTheme.neoMint
+                    )
+                }
+
+                Divider().overlay(EchoTheme.border)
+
+                // Server Port & Voice Intro Length
+                VStack(alignment: .leading, spacing: 12) {
+                    // Port row
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("WEB SERVER PORT")
+                                .font(.system(size: 9.5, weight: .black, design: .monospaced))
+                                .tracking(1.1)
+                                .foregroundStyle(EchoTheme.neoCyan)
+                            Text("Custom port (1024–65535) or default 53333")
+                                .font(.system(size: 11))
+                                .foregroundStyle(EchoTheme.textMuted)
+                        }
+
+                        Spacer()
+
+                        if isEditingPort {
+                            HStack(spacing: 6) {
+                                TextField("53333", text: $portDraft)
+                                    .textFieldStyle(.plain)
+                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(EchoTheme.textPrimary)
+                                    .frame(width: 72)
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 4.5)
+                                    .background(EchoTheme.surfaceElevated)
+                                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                    .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(EchoTheme.neoCyan.opacity(0.7), lineWidth: 1))
+                                    .onSubmit {
+                                        if store.setPartyPort(portDraft) {
+                                            isEditingPort = false
+                                        }
+                                    }
+
+                                Button("Apply") {
+                                    if store.setPartyPort(portDraft) {
+                                        isEditingPort = false
+                                    }
+                                }
+                                .font(.system(size: 11, weight: .bold))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4.5)
+                                .background(EchoTheme.neoMint.opacity(0.20))
+                                .foregroundStyle(EchoTheme.neoMint)
+                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(EchoTheme.neoMint.opacity(0.6), lineWidth: 1))
+                                .buttonStyle(.plain)
+
+                                Button("Default") {
+                                    portDraft = String(EchoStore.defaultPartyPort)
+                                    _ = store.setPartyPort("")
+                                    isEditingPort = false
+                                }
+                                .font(.system(size: 11, weight: .semibold))
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 4.5)
+                                .background(EchoTheme.surfaceElevated)
+                                .foregroundStyle(EchoTheme.textSecondary)
+                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(EchoTheme.border, lineWidth: 1))
+                                .buttonStyle(.plain)
+                                .help("Reset to default Party Mode port 53333.")
+                            }
+                        } else {
+                            HStack(spacing: 8) {
+                                NeoSecondaryButton(
+                                    title: store.partyServerPort > 0
+                                        ? "Edit Port (\(String(store.partyServerPort)))"
+                                        : (store.partyPreferredPort.map { "Edit Port (\(String($0)))" } ?? "Edit Port (53333)"),
+                                    icon: "network",
+                                    accent: EchoTheme.neoCyan
+                                ) {
+                                    if let pref = store.partyPreferredPort {
+                                        portDraft = String(pref)
+                                    } else if store.partyServerPort > 0 {
+                                        portDraft = String(store.partyServerPort)
+                                    } else {
+                                        portDraft = String(EchoStore.defaultPartyPort)
+                                    }
+                                    isEditingPort = true
+                                }
+
+                                if isLive {
+                                    NeoSecondaryButton(title: "Random", icon: "arrow.triangle.2.circlepath", accent: EchoTheme.neoCyan) {
+                                        store.restartPartyServerOnNewPort()
+                                    }
+                                    .help("Restart the guest web server on a fresh random port.")
+                                }
+                            }
+                        }
+                    }
+
+                    // Max Voice Intro row
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("MAX VOICE INTRO")
+                                .font(.system(size: 9.5, weight: .black, design: .monospaced))
+                                .tracking(1.1)
+                                .foregroundStyle(EchoTheme.neoMagenta)
+                            Text("Maximum guest intro clip duration (5s–60s)")
+                                .font(.system(size: 11))
+                                .foregroundStyle(EchoTheme.textMuted)
+                        }
+
+                        Spacer()
+
+                        HStack(spacing: 6) {
+                            Image(systemName: "mic.fill")
+                                .font(.system(size: 10.5, weight: .bold))
+                                .foregroundStyle(EchoTheme.neoMagenta)
+                            Button {
+                                store.setPartyMaxIntroSeconds(store.partyMaxIntroSeconds - 5)
+                            } label: {
+                                Image(systemName: "minus")
+                                    .font(.system(size: 9.5, weight: .bold))
+                                    .frame(width: 22, height: 22)
+                                    .background(EchoTheme.surfaceElevated)
+                                    .foregroundStyle(EchoTheme.textPrimary)
+                                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(store.partyMaxIntroSeconds <= 5)
+
+                            Text("\(store.partyMaxIntroSeconds)s")
+                                .font(.system(size: 12, weight: .black, design: .monospaced))
+                                .foregroundStyle(EchoTheme.neoMagenta)
+                                .frame(minWidth: 32)
+
+                            Button {
+                                store.setPartyMaxIntroSeconds(store.partyMaxIntroSeconds + 5)
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 9.5, weight: .bold))
+                                    .frame(width: 22, height: 22)
+                                    .background(EchoTheme.surfaceElevated)
+                                    .foregroundStyle(EchoTheme.textPrimary)
+                                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(store.partyMaxIntroSeconds >= 60)
+                        }
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(EchoTheme.surfaceElevated.opacity(0.65))
+                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                        .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.neoMagenta.opacity(0.45), lineWidth: 1))
+                    }
+                }
+
+                HStack {
+                    Spacer()
+                    NeoPrimaryButton(title: "Done", icon: "checkmark") {
+                        showPartySettingsLightbox = false
+                        isEditingPort = false
+                    }
+                }
+                .padding(.top, 4)
+            }
+            .padding(22)
+            .frame(width: 520)
+            .background(EchoTheme.surface)
+            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous)
+                    .strokeBorder(EchoTheme.neoCyan.opacity(0.5), lineWidth: 1.2)
+            )
+            .shadow(color: .black.opacity(0.75), radius: 28, y: 12)
+        }
+    }
+
+    private func partySettingToggleRow(
+        title: String,
+        subtitle: String,
+        isOn: Binding<Bool>,
+        tint: Color
+    ) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(EchoTheme.textPrimary)
+                Text(subtitle)
+                    .font(.system(size: 11))
+                    .foregroundStyle(EchoTheme.textMuted)
+            }
+            Spacer(minLength: 8)
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(tint)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(EchoTheme.surfaceElevated.opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+        .overlay(
+            RoundedRectangle(cornerRadius: EchoTheme.radiusControl)
+                .strokeBorder(EchoTheme.border.opacity(0.75), lineWidth: 1)
         )
     }
 
@@ -873,7 +1007,7 @@ struct PartyModeView: View {
                 }
                 .background(
                     WindowKeyDownMonitor { event in
-                        guard store.lightboxAlbum == nil else { return false }
+                        guard store.lightboxAlbum == nil && !showPartySettingsLightbox else { return false }
                         switch event.keyCode {
                         case 51, 117: // Delete or Forward Delete
                             guard let targetIdx = selectedRowIndex ?? focusedRowIndex,
