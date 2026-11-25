@@ -106,6 +106,8 @@ Prebuilt macOS (Apple Silicon) `.app` bundles are published on the [**GitHub Rel
   ```
 
 #### Quick Install
+> 📖 **Need step-by-step help installing without an App Store / Apple Developer certificate (including Gatekeeper & iPhone/iPad sideloading)?** See [**HOW-TO-INSTALL.md**](HOW-TO-INSTALL.md).
+
 1. Download and unzip `My-Echo-v1.3.0-macOS-arm64.zip`.
 2. Drag **`My Echo.app`** into `/Applications`.
 3. Verify checksum (optional):
