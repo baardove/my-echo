@@ -263,6 +263,10 @@ Crisp **≤ 8px** corner geometry, icon-first controls backed by descriptive too
 - **QR Code Guest Web App:** Instant zero-install desktop and mobile browser UI on your Wi-Fi network (editable/random port) with full-library multi-field search (`artist:`, `track:`, `+req`, `-excl`), A–Z / New / Shuffle browsing, active user presence, **Party Chat**, and **Listen-Along** audio streaming.
 - **Broadcast-Processed Voice Intros:** Guests can record short DJ intros from their phone (via an automatic companion local HTTPS/TLS listener) that are EQ'd, compressed, normalized, and ducked smoothly over the start of their requested song.
 
+### 11. Apple TV (`tvOS/`) Companion App (`MyEchoTV`)
+- **Native Living-Room Client:** Dedicated SwiftUI tvOS companion app (`tvOS/MyEchoTV.xcodeproj`) paired over LAN with My Echo on Mac using a dedicated 6-digit Apple TV PIN (configurable in macOS **Settings**).
+- **Mac Catalog Streaming & Remote Control:** Browse and stream your Mac library on Apple TV, control Mac playback remotely (play/pause, skip, seek, volume), view the live **Party Mode** big-screen dashboard with QR code, connect to **Navidrome**, and listen to **Podcasts**.
+
 ---
 
 ## Requirements
@@ -275,7 +279,7 @@ Crisp **≤ 8px** corner geometry, icon-first controls backed by descriptive too
 ## Building, Running & Testing
 
 ```bash
-# Run the unit test suite (34 tests in EchoCoreTests)
+# Run the unit test suite (35 tests in EchoCoreTests)
 swift test
 
 # Build the release macOS .app bundle with custom 90s Neon Cassette AppIcon.icns
@@ -335,7 +339,7 @@ Echo/
 │   │       ├── PathFormatter.swift                    # FAT32/NFC sanitization, ARTIST/ALBUM/TRACK, Podcasts, M3U/M3U8
 │   │       ├── AudioFileCopyOptimizer.swift           # xattr-free copy + safe FLAC PICTURE & MP3 ID3v2.3 rewrite
 │   │       ├── SyncEngine.swift                       # SyncPlanner, SyncEngine, DeviceSyncManifest, POSIX ._* cleaner
-│   │       ├── WirelessSyncServer.swift               # Bonjour + HTTP Wi-Fi iOS sync server & Lidarr/podcast relay
+│   │       ├── WirelessSyncServer.swift               # Bonjour + HTTP Wi-Fi iOS sync & Apple TV catalog/remote API
 │   │       └── VolumeMonitor.swift                    # Removable volume detection & Clean-and-Eject
 │   └── EchoApp/                                       # Native macOS SwiftUI interface
 │       ├── EchoApp.swift                              # Main Studio & Winamp Mini Player scenes + menu commands
@@ -348,13 +352,14 @@ Echo/
 │           ├── PartyModeView.swift                    # Party Mode host control center, Settings lightbox, QR code, chat & quick add
 │           ├── PodcastsView.swift                     # Multi-directory search, categories, OPML, show/episode views
 │           ├── DeviceSyncView.swift                   # FiiO telemetry, preset config, pre-sync diff & live progress
-│           ├── SettingsView.swift                     # Single/Multi-Destination mode, call auto-pause, Lidarr & themes
+│           ├── SettingsView.swift                     # Single/Multi-Destination mode, call auto-pause, Apple TV PIN & themes
 │           ├── PlayerBarView.swift                    # Persistent bottom playback bar, output device picker & queue popover
 │           ├── WinampMiniPlayerView.swift             # Floating resizable Winamp Mini Player with live spectrum & PL drawer
 │           └── SharedComponents.swift                 # Artwork, star ratings, destination/format badges, draggable TrackRowView
 ├── iOS/                                               # Universal iPhone & iPad companion app (MyEchoiOS)
+├── tvOS/                                              # Apple TV companion app (MyEchoTV)
 └── Tests/
-    └── EchoCoreTests/EchoCoreTests.swift              # 34 unit tests covering metadata, artwork, sync, Party Mode, ratings & SQLite
+    └── EchoCoreTests/EchoCoreTests.swift              # 35 unit tests covering metadata, artwork, sync, Party Mode, Apple TV, ratings & SQLite
 ```
 
 ---
