@@ -31,16 +31,27 @@ private struct MiniPlayerWindowConfigurator: NSViewRepresentable {
 
     private func apply(to window: NSWindow?, coordinator: Coordinator) {
         guard let window else { return }
+
+        // True borderless custom-chrome Winamp window: remove macOS `.titled` titlebar completely
+        // while keeping `.resizable` so NSWindow.canBecomeKey remains true and edges remain resizable!
+        let desiredMask: NSWindow.StyleMask = [.borderless, .resizable]
+        if window.styleMask != desiredMask {
+            let savedFrame = window.frame
+            window.styleMask = desiredMask
+            window.title = "My Echo Mini"
+            window.setFrame(savedFrame, display: true)
+            window.invalidateShadow()
+        } else if window.title != "My Echo Mini" {
+            window.title = "My Echo Mini"
+        }
+
         window.level = alwaysOnTop ? .floating : .normal
         window.isMovableByWindowBackground = true
+        window.hasShadow = true
+        window.isOpaque = false
+        window.backgroundColor = .clear
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.titlebarSeparatorStyle = .none
-        window.styleMask.remove(.fullSizeContentView)
-        window.standardWindowButton(.closeButton)?.isHidden = false
-        window.standardWindowButton(.miniaturizeButton)?.isHidden = false
-        window.standardWindowButton(.zoomButton)?.isHidden = true
-        window.backgroundColor = NSColor(red: 0.105, green: 0.120, blue: 0.160, alpha: 1)
 
         let modeKey = isShadeMode ? "shade" : (showPlaylistDrawer ? "expanded" : "deck")
 
@@ -57,13 +68,13 @@ private struct MiniPlayerWindowConfigurator: NSViewRepresentable {
         let targetH: CGFloat?
 
         if isShadeMode {
-            minH = 62
-            maxH = 62
-            targetH = 62
+            minH = 56
+            maxH = 56
+            targetH = 56
         } else if !showPlaylistDrawer {
-            minH = 196
-            maxH = 196
-            targetH = 196
+            minH = 194
+            maxH = 194
+            targetH = 194
         } else {
             minH = 300
             maxH = 4000
@@ -88,6 +99,38 @@ private struct MiniPlayerWindowConfigurator: NSViewRepresentable {
     }
 }
 
+/// Native AppKit window-drag handle for the borderless Winamp header.
+/// Supports immediate 1-click dragging (even when unfocused) and authentic Winamp double-click Windowshade toggle.
+private struct MiniPlayerHeaderDragHandle: NSViewRepresentable {
+    var onDoubleClick: (() -> Void)? = nil
+
+    func makeNSView(context: Context) -> DragNSView {
+        let view = DragNSView()
+        view.onDoubleClick = onDoubleClick
+        return view
+    }
+
+    func updateNSView(_ nsView: DragNSView, context: Context) {
+        nsView.onDoubleClick = onDoubleClick
+    }
+
+    final class DragNSView: NSView {
+        var onDoubleClick: (() -> Void)?
+
+        override var mouseDownCanMoveWindow: Bool { true }
+
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func mouseDown(with event: NSEvent) {
+            if event.clickCount == 2 {
+                onDoubleClick?()
+                return
+            }
+            window?.performDrag(with: event)
+        }
+    }
+}
+
 struct WinampMiniPlayerView: View {
     @Environment(EchoStore.self) private var store
     @Environment(\.openWindow) private var openWindow
@@ -101,6 +144,9 @@ struct WinampMiniPlayerView: View {
     @State private var isScrubbing: Bool = false
     @State private var scrubValue: Double = 0
     @State private var isDropTargeted: Bool = false
+    @State private var isMainWindowVisible: Bool = true
+    @State private var selectedQueueIndex: Int? = nil
+    @FocusState private var focusedQueueIndex: Int?
 
     // Classic Winamp 2.x palette (or active Echo theme when skin toggle is switched)
     private var chassisBG: Color {
@@ -145,21 +191,28 @@ struct WinampMiniPlayerView: View {
         .frame(
             minWidth: 396,
             maxWidth: 480,
-            minHeight: isShadeMode ? 62 : (showPlaylistDrawer ? 300 : 196),
-            maxHeight: isShadeMode ? 62 : (showPlaylistDrawer ? .infinity : 196),
+            minHeight: isShadeMode ? 56 : (showPlaylistDrawer ? 300 : 194),
+            maxHeight: isShadeMode ? 56 : (showPlaylistDrawer ? .infinity : 194),
             alignment: .top
         )
         .background(chassisBG)
         .overlay(
-            RoundedRectangle(cornerRadius: 4)
-                .strokeBorder(isDropTargeted ? lcdPrimary : bevelLight, lineWidth: isDropTargeted ? 2 : 1)
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .strokeBorder(isDropTargeted ? lcdPrimary : bevelLight, lineWidth: isDropTargeted ? 2 : 1.2)
         )
+        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
         .background(MiniPlayerWindowConfigurator(
             alwaysOnTop: alwaysOnTop,
             isShadeMode: isShadeMode,
             showPlaylistDrawer: showPlaylistDrawer
         ))
         .preferredColorScheme(.dark)
+        .onAppear {
+            store.isMiniPlayerOpen = true
+        }
+        .onDisappear {
+            store.isMiniPlayerOpen = false
+        }
         .dropDestination(for: String.self) { items, _ in
             let (dropped, _) = store.resolveTracks(fromDragStrings: items)
             guard !dropped.isEmpty else { return false }
@@ -179,31 +232,43 @@ struct WinampMiniPlayerView: View {
 
     private func winampTitleBar(track: Track?) -> some View {
         HStack(spacing: 6) {
-            // Classic Winamp top-left bolt/waveform emblem box
-            ZStack {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.black.opacity(0.45))
-                    .frame(width: 18, height: 16)
-                    .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(bevelLight, lineWidth: 0.8))
-                Image(systemName: "waveform")
-                    .font(.system(size: 9, weight: .black))
-                    .foregroundStyle(lcdPrimary)
+            // Draggable header zone (waveform emblem + grill lines + wordmark + right grill)
+            HStack(spacing: 6) {
+                // Classic Winamp top-left bolt/waveform emblem box
+                ZStack {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.black.opacity(0.45))
+                        .frame(width: 18, height: 16)
+                        .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(bevelLight, lineWidth: 0.8))
+                    Image(systemName: "waveform")
+                        .font(.system(size: 9, weight: .black))
+                        .foregroundStyle(lcdPrimary)
+                }
+
+                winampGrillLines
+                    .frame(width: 28)
+
+                // Classic embossed Winamp center-left wordmark
+                Text(store.isPartyModeEnabled ? "MY ECHO · PARTY" : "MY ECHO · WINAMP")
+                    .font(.system(size: 9.5, weight: .black, design: .monospaced))
+                    .tracking(1.4)
+                    .foregroundStyle(store.isPartyModeEnabled ? EchoTheme.neoMagenta : Color.white.opacity(0.95))
+                    .shadow(color: .black.opacity(0.85), radius: 0, x: 0, y: 1)
+                    .lineLimit(1)
+                    .fixedSize()
+
+                winampGrillLines
+                    .frame(maxWidth: .infinity)
             }
-
-            winampGrillLines
-                .frame(width: 28)
-
-            // Classic embossed Winamp center-left wordmark
-            Text("MY ECHO")
-                .font(.system(size: 10.5, weight: .black, design: .monospaced))
-                .tracking(1.6)
-                .foregroundStyle(Color.white.opacity(0.95))
-                .shadow(color: .black.opacity(0.8), radius: 0, x: 0, y: 1)
-                .lineLimit(1)
-                .fixedSize()
-
-            winampGrillLines
-                .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .overlay {
+                MiniPlayerHeaderDragHandle {
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        isShadeMode.toggle()
+                    }
+                }
+            }
 
             // Skin Toggle (Classic Winamp 99 vs Active Echo Theme)
             titleMicroButton(
@@ -270,19 +335,19 @@ struct WinampMiniPlayerView: View {
             .buttonStyle(.plain)
             .help("Close the Mini Player window (music keeps playing in My Echo).")
         }
-        .padding(.horizontal, 12)
-        .frame(height: 28)
+        .padding(.horizontal, 7)
+        .frame(height: 24)
         .background(
             LinearGradient(
                 colors: useClassicWinampSkin
-                    ? [Color(red: 0.23, green: 0.27, blue: 0.38), Color(red: 0.12, green: 0.15, blue: 0.22), Color(red: 0.08, green: 0.10, blue: 0.15)]
+                    ? [Color(red: 0.25, green: 0.30, blue: 0.42), Color(red: 0.13, green: 0.16, blue: 0.24), Color(red: 0.08, green: 0.10, blue: 0.16)]
                     : [EchoTheme.surfaceElevated, EchoTheme.sidebar],
                 startPoint: .top,
                 endPoint: .bottom
             )
         )
         .overlay(alignment: .top) {
-            Rectangle().fill(Color.white.opacity(0.28)).frame(height: 1)
+            Rectangle().fill(Color.white.opacity(0.32)).frame(height: 1)
         }
         .overlay(alignment: .bottom) {
             Rectangle().fill(bevelDark).frame(height: 1.5)
@@ -325,7 +390,7 @@ struct WinampMiniPlayerView: View {
     private func windowShadeBar(player: AudioPlayerEngine, track: Track?) -> some View {
         HStack(spacing: 8) {
             Text(formattedClock(player: player))
-                .font(.system(size: 12, weight: .black, design: .monospaced))
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(lcdPrimary)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
@@ -371,9 +436,9 @@ struct WinampMiniPlayerView: View {
                             .foregroundStyle(player.isPlaying ? lcdPrimary : lcdSecondary)
 
                         Text(formattedClock(player: player))
-                            .font(.system(size: 20, weight: .black, design: .monospaced))
+                            .font(.system(size: 19, weight: .medium, design: .monospaced))
                             .foregroundStyle(lcdPrimary)
-                            .shadow(color: lcdPrimary.opacity(0.5), radius: 4)
+                            .shadow(color: lcdPrimary.opacity(0.38), radius: 3)
                             .onTapGesture { showRemainingTime.toggle() }
                             .help("Click LCD clock to toggle Elapsed / Remaining time.")
                     }
@@ -488,6 +553,47 @@ struct WinampMiniPlayerView: View {
             .clipShape(RoundedRectangle(cornerRadius: 3))
             .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(bevelDark, lineWidth: 1))
 
+            // Classic Winamp 5-Button Beveled Transport Bar + Shuffle + Repeat
+            HStack(spacing: 5) {
+                winampButton("backward.end.fill", tip: "Previous track (⌘←)") { player.previousTrack() }
+                winampButton("play.fill", accent: player.isPlaying, tip: "Play current track") { player.resumeOrPlay() }
+                winampButton("pause.fill", accent: !player.isPlaying && track != nil, tip: "Pause playback") { player.pause() }
+                winampButton("stop.fill", tip: "Stop playback and reset to 0:00") { player.stopPlaybackKeepTrack() }
+                winampButton("forward.end.fill", tip: "Next track (⌘→)") { player.nextTrack() }
+
+                winampButton(
+                    "eject.fill",
+                    accent: isMainWindowVisible,
+                    tip: isMainWindowVisible
+                        ? "Hide main My Echo window (keep Mini Player floating)"
+                        : "Show main My Echo window"
+                ) {
+                    toggleMainWindowVisibility()
+                }
+                .padding(.leading, 4)
+                .onAppear {
+                    refreshMainWindowVisibilityState()
+                }
+
+                Spacer()
+
+                miniPillToggle(
+                    title: "SHUF",
+                    active: player.isShuffled,
+                    tip: player.isShuffled ? "Shuffle is ON. Click to restore queue order." : "Shuffle playback queue."
+                ) {
+                    player.isShuffled.toggle()
+                }
+
+                miniPillToggle(
+                    title: player.repeatMode == .one ? "REP 1" : "REP",
+                    active: player.repeatMode != .off,
+                    tip: "Cycle repeat mode (Off → Repeat All → Repeat One). Current: \(player.repeatMode.rawValue)."
+                ) {
+                    player.cycleRepeatMode()
+                }
+            }
+
             // Volume + Quick Focused-Playlist (+), Sync, and PL Drawer Toggle Row
             HStack(spacing: 8) {
                 Button {
@@ -547,43 +653,6 @@ struct WinampMiniPlayerView: View {
                     }
                 }
             }
-
-            // Classic Winamp 5-Button Beveled Transport Bar + Shuffle + Repeat
-            HStack(spacing: 5) {
-                winampButton("backward.end.fill", tip: "Previous track (⌘←)") { player.previousTrack() }
-                winampButton("play.fill", accent: player.isPlaying, tip: "Play current track") { player.resumeOrPlay() }
-                winampButton("pause.fill", accent: !player.isPlaying && track != nil, tip: "Pause playback") { player.pause() }
-                winampButton("stop.fill", tip: "Stop playback and reset to 0:00") { player.stopPlaybackKeepTrack() }
-                winampButton("forward.end.fill", tip: "Next track (⌘→)") { player.nextTrack() }
-
-                winampButton("eject.fill", tip: "Jump back to the full My Echo library to pick music or playlists") {
-                    if let mainWin = NSApp.windows.first(where: { $0.title == "My Echo" }) {
-                        mainWin.makeKeyAndOrderFront(nil)
-                        NSApp.activate(ignoringOtherApps: true)
-                    } else {
-                        openWindow(id: "main-studio")
-                    }
-                }
-                .padding(.leading, 4)
-
-                Spacer()
-
-                miniPillToggle(
-                    title: "SHUF",
-                    active: player.isShuffled,
-                    tip: player.isShuffled ? "Shuffle is ON. Click to restore queue order." : "Shuffle playback queue."
-                ) {
-                    player.isShuffled.toggle()
-                }
-
-                miniPillToggle(
-                    title: player.repeatMode == .one ? "REP 1" : "REP",
-                    active: player.repeatMode != .off,
-                    tip: "Cycle repeat mode (Off → Repeat All → Repeat One). Current: \(player.repeatMode.rawValue)."
-                ) {
-                    player.cycleRepeatMode()
-                }
-            }
         }
         .padding(10)
         .background(chassisPanel)
@@ -627,26 +696,63 @@ struct WinampMiniPlayerView: View {
                     LazyVStack(spacing: 1) {
                         ForEach(Array(player.queue.enumerated()), id: \.offset) { idx, t in
                             let isCurrent = idx == player.currentIndex
+                            let isSelected = selectedQueueIndex == idx || focusedQueueIndex == idx
                             HStack(spacing: 6) {
                                 Text("\(idx + 1). \(t.artist) - \(t.title)")
                                     .font(.system(size: 10.5, weight: isCurrent ? .bold : .regular, design: .monospaced))
-                                    .foregroundStyle(isCurrent ? Color.white : lcdPrimary.opacity(0.88))
+                                    .foregroundStyle(isCurrent ? Color.white : (isSelected ? lcdSecondary : lcdPrimary.opacity(0.88)))
                                     .lineLimit(1)
                                 Spacer(minLength: 6)
                                 Text(Formatters.duration(t.duration))
                                     .font(.system(size: 10, design: .monospaced))
-                                    .foregroundStyle(isCurrent ? Color.white : lcdPrimary.opacity(0.65))
+                                    .foregroundStyle(isCurrent ? Color.white : (isSelected ? lcdSecondary : lcdPrimary.opacity(0.65)))
                             }
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3.5)
-                            .background(isCurrent ? Color(red: 0.05, green: 0.25, blue: 0.55) : Color.clear)
+                            .background(
+                                isSelected
+                                    ? Color(red: 0.08, green: 0.34, blue: 0.68)
+                                    : (isCurrent ? Color(red: 0.05, green: 0.25, blue: 0.55) : Color.clear)
+                            )
+                            .overlay(
+                                Rectangle()
+                                    .strokeBorder(isSelected ? lcdPrimary.opacity(0.55) : Color.clear, lineWidth: 0.8)
+                            )
                             .contentShape(Rectangle())
+                            .focusable()
+                            .focusEffectDisabled()
+                            .focused($focusedQueueIndex, equals: idx)
                             .onTapGesture(count: 2) {
+                                selectedQueueIndex = idx
+                                focusedQueueIndex = idx
                                 player.jumpToQueueIndex(idx)
                             }
+                            .simultaneousGesture(
+                                TapGesture(count: 1).onEnded {
+                                    selectedQueueIndex = idx
+                                    focusedQueueIndex = idx
+                                }
+                            )
                             .contextMenu {
                                 Button("Play Track") { player.jumpToQueueIndex(idx) }
-                                Button("Remove from Queue") { player.removeFromQueue(at: idx) }
+                                Menu("Add to Playlist") {
+                                    ForEach(store.playlists) { pl in
+                                        Button(pl.name) {
+                                            store.addTracks([t], toPlaylistID: pl.id)
+                                        }
+                                    }
+                                    if !store.playlists.isEmpty {
+                                        Divider()
+                                    }
+                                    Button("Create New Playlist...") {
+                                        let created = store.createPlaylist(name: "My Playlist", initialTrackIDs: [t.id])
+                                        store.navigate(to: .playlist(created.id))
+                                    }
+                                }
+                                Divider()
+                                Button("Remove from Queue", role: .destructive) {
+                                    player.removeFromQueue(at: idx)
+                                }
                             }
                         }
                     }
@@ -654,6 +760,50 @@ struct WinampMiniPlayerView: View {
                 }
                 .frame(minHeight: 80, maxHeight: .infinity)
                 .background(lcdBG)
+                .background(
+                    WindowKeyDownMonitor { event in
+                        guard showPlaylistDrawer && !isShadeMode else { return false }
+                        switch event.keyCode {
+                        case 51, 117: // Delete or Forward Delete
+                            guard let targetIdx = selectedQueueIndex ?? focusedQueueIndex,
+                                  targetIdx >= 0 && targetIdx < player.queue.count else {
+                                return false
+                            }
+                            player.removeFromQueue(at: targetIdx)
+                            let remaining = player.queue.count
+                            let nextSel: Int? = remaining > 0 ? min(targetIdx, remaining - 1) : nil
+                            selectedQueueIndex = nextSel
+                            focusedQueueIndex = nextSel
+                            return true
+                        case 125: // Down
+                            guard !player.queue.isEmpty, let cur = selectedQueueIndex ?? focusedQueueIndex else { return false }
+                            let next = min(player.queue.count - 1, cur + 1)
+                            selectedQueueIndex = next
+                            focusedQueueIndex = next
+                            return true
+                        case 126: // Up
+                            guard !player.queue.isEmpty, let cur = selectedQueueIndex ?? focusedQueueIndex else { return false }
+                            let prev = max(0, cur - 1)
+                            selectedQueueIndex = prev
+                            focusedQueueIndex = prev
+                            return true
+                        case 36, 76: // Return
+                            guard let targetIdx = selectedQueueIndex ?? focusedQueueIndex,
+                                  targetIdx >= 0 && targetIdx < player.queue.count else {
+                                return false
+                            }
+                            player.jumpToQueueIndex(targetIdx)
+                            return true
+                        case 53: // Escape
+                            guard selectedQueueIndex != nil || focusedQueueIndex != nil else { return false }
+                            selectedQueueIndex = nil
+                            focusedQueueIndex = nil
+                            return true
+                        default:
+                            return false
+                        }
+                    }
+                )
             }
         }
         .padding(.horizontal, 6)
@@ -725,13 +875,49 @@ struct WinampMiniPlayerView: View {
         .help(tip)
     }
 
+    private func mainStudioWindow() -> NSWindow? {
+        NSApp.windows.first(where: { $0.title == "My Echo" })
+    }
+
+    private func refreshMainWindowVisibilityState() {
+        if let mainWin = mainStudioWindow() {
+            isMainWindowVisible = mainWin.isVisible && !mainWin.isMiniaturized
+        } else {
+            isMainWindowVisible = false
+        }
+    }
+
+    private func toggleMainWindowVisibility() {
+        if let mainWin = mainStudioWindow() {
+            if mainWin.isVisible && !mainWin.isMiniaturized {
+                mainWin.orderOut(nil)
+                isMainWindowVisible = false
+            } else {
+                if mainWin.isMiniaturized {
+                    mainWin.deminiaturize(nil)
+                }
+                mainWin.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+                isMainWindowVisible = true
+            }
+        } else {
+            openWindow(id: "main-studio")
+            NSApp.activate(ignoringOtherApps: true)
+            isMainWindowVisible = true
+        }
+    }
+
     private func focusMainWindow() {
-        if let mainWin = NSApp.windows.first(where: { $0.title == "My Echo" }) {
+        if let mainWin = mainStudioWindow() {
+            if mainWin.isMiniaturized {
+                mainWin.deminiaturize(nil)
+            }
             mainWin.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         } else {
             openWindow(id: "main-studio")
         }
+        isMainWindowVisible = true
     }
 
     private func formattedClock(player: AudioPlayerEngine) -> String {

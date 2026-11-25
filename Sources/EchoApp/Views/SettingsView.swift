@@ -391,6 +391,48 @@ struct SettingsView: View {
                                 }
                             }
                         }
+
+                        Divider().overlay(EchoTheme.border)
+
+                        HStack(spacing: 16) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Auto-Pause on Calls & Meetings")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(EchoTheme.textPrimary)
+                                Text("Automatically pauses playback when WhatsApp, Messenger, Teams, Google Meet, Zoom, FaceTime, or a phone call activates an audio input, or when headphones/USB DAC disconnect.")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(EchoTheme.textSecondary)
+                            }
+                            Spacer()
+                            Toggle("", isOn: Binding(
+                                get: { store.player.autoPauseOnCall },
+                                set: { store.player.autoPauseOnCall = $0 }
+                            ))
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                            .tint(EchoTheme.neoMint)
+                        }
+
+                        if store.player.autoPauseOnCall {
+                            HStack(spacing: 16) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Auto-Resume When Call Ends")
+                                        .font(.system(size: 12.5, weight: .semibold))
+                                        .foregroundStyle(EchoTheme.textPrimary)
+                                    Text("Resumes playback automatically 1.5 seconds after the call or meeting finishes.")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(EchoTheme.textMuted)
+                                }
+                                Spacer()
+                                Toggle("", isOn: Binding(
+                                    get: { store.player.autoResumeAfterCall },
+                                    set: { store.player.autoResumeAfterCall = $0 }
+                                ))
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                                .tint(EchoTheme.neoMint)
+                            }
+                        }
                     }
                     .padding(14)
                     .background(EchoTheme.surface)

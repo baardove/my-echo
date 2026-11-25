@@ -1,8 +1,24 @@
 import Foundation
 import SwiftUI
 import AppKit
+import AVFoundation
+import UniformTypeIdentifiers
 import Observation
 import EchoCore
+
+enum PlaylistExportFormat: String, CaseIterable {
+    case pls
+    case m3u8
+
+    var fileExtension: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .pls: return "PLS (Winamp)"
+        case .m3u8: return "M3U8 (Extended M3U)"
+        }
+    }
+}
 
 enum EchoDragPayload {
     case tracks([String])
@@ -83,6 +99,7 @@ enum TrackTableSortColumn: String, Equatable {
     case album
     case plays
     case popularity
+    case rating
     case format
     case sync
     case duration
@@ -90,7 +107,7 @@ enum TrackTableSortColumn: String, Equatable {
     var defaultAscending: Bool {
         switch self {
         case .index, .title, .album: return true
-        case .plays, .popularity, .format, .sync, .duration: return false
+        case .plays, .popularity, .rating, .format, .sync, .duration: return false
         }
     }
 }
@@ -112,6 +129,7 @@ struct TrackTableSortState: Equatable {
 enum TrackSortOrder: String, CaseIterable, Identifiable {
     case library = "Default"
     case newArrivals = "New Arrivals"
+    case highestRated = "Highest Rated"
     case mostPlayed = "Most Played"
     case onlinePopularity = "Online Popularity"
     case recentlyPlayed = "Recently Played"
@@ -124,6 +142,7 @@ enum AlbumSortOrder: String, CaseIterable, Identifiable {
     case title = "A–Z"
     case newArrivals = "New Arrivals"
     case newReleases = "New Releases"
+    case highestRated = "Highest Rated"
     case mostPlayed = "Most Played"
     case onlinePopularity = "Online Popularity"
     var id: String { rawValue }
@@ -185,15 +204,38 @@ enum NavDestination: Hashable {
     case podcasts
     case podcastDetail(UUID)
     case playlist(UUID)
+    case partyMode
     case lidarr
     case sources
     case deviceSync(UUID)
     case settings
 }
 
+struct PartyGuestActivityItem: Identifiable, Hashable {
+    let id = UUID()
+    let trackID: String
+    let trackTitle: String
+    let artist: String
+    let guestID: String?
+    var guestName: String
+    let addedAt: Date
+}
+
+struct PartyVoiceIntroRecord: Identifiable, Hashable {
+    var id: String { trackID }
+    let trackID: String
+    let fileURL: URL
+    let duration: TimeInterval
+    let guestID: String?
+    var guestName: String
+    let recordedAt: Date
+}
+
 @MainActor
 @Observable
 final class EchoStore {
+    static let partyPlaylistName = "Partymode"
+
     let database: EchoDatabase
     let artworkCache: ArtworkCache
     let indexer: LibraryIndexer
@@ -201,6 +243,7 @@ final class EchoStore {
     let popularityService: OnlinePopularityService
     let lidarrClient: LidarrClient
     let wirelessSyncServer: WirelessSyncServer
+    let partyModeServer: PartyModeServer
     let syncEngine: SyncEngine
     let player: AudioPlayerEngine
 
@@ -209,6 +252,8 @@ final class EchoStore {
     var navHistory: [NavDestination] = [.home]
     var navHistoryIndex: Int = 0
     var searchQuery: String = ""
+    /// Minimum star filter for global search (0 = off, 1...5 = at least X stars)
+    var minStarRating: Int = 0
     var trackSortOrder: TrackSortOrder = .library
     var trackSortAscending: Bool = true
     var trackTableColumn: TrackTableSortColumn? = nil
@@ -220,8 +265,9 @@ final class EchoStore {
     var onlinePopularityEnabled: Bool = true
     var lastFMAPIKey: String = ""
 
-    // Play Counts & Online Popularity
+    // Play Counts, Star Ratings & Online Popularity
     var trackStats: [String: TrackStats] = [:]
+    var albumRatings: [String: AlbumUserRating] = [:]
     var artistStats: [String: ArtistOnlineStats] = [:]
     var fetchingPopularityKeys: Set<String> = []
     var isBatchFetchingPopularity: Bool = false
@@ -317,6 +363,28 @@ final class EchoStore {
     var lastWirelessClientName: String? = nil
     var wirelessManifestVersions: [UUID: String] = [:]
 
+    // Party Mode (Locked Dynamic "Partymode" Playlist + Stable/Custom-Port Guest Web Server)
+    static let defaultPartyPort: UInt16 = 53_333
+    var isPartyModeEnabled: Bool = false
+    var partyPlaylistID: UUID? = nil
+    var isPartyServerRunning: Bool = false
+    var partyServerPort: UInt16 = 0
+    var partyPreferredPort: UInt16? = EchoStore.defaultPartyPort
+    var partyServerLANIP: String? = WirelessSyncServer.localLANIPAddress()
+    var partyServerLastError: String? = nil
+    var partyAutoPlayOnRequest: Bool = true
+    var partyAllowReRequestPlayed: Bool = true
+    var partyChatEnabled: Bool = true
+    var partyStreamingEnabled: Bool = true
+    var partyMaxIntroSeconds: Int = 15
+    var partyVoiceIntrosByTrackID: [String: PartyVoiceIntroRecord] = [:]
+    var partyGuests: [PartyGuestPresence] = []
+    var partyChatMessages: [PartyChatMessage] = []
+    var partyGuestActivity: [PartyGuestActivityItem] = []
+    private var partyRequesterByTrackID: [String: (guestID: String?, guestName: String, addedAt: Date)] = [:]
+    private var partyStateRevision: Int = 0
+    private var partyPresenceTask: Task<Void, Never>?
+
     // Live Activity
     var isIndexing: Bool = false
     var indexProgress: IndexProgress?
@@ -326,6 +394,7 @@ final class EchoStore {
     var lastSyncSummary: SyncExecutionSummary?
     var toastMessage: String?
     var toastIsError: Bool = false
+    var isMiniPlayerOpen: Bool = false
     var lightboxAlbum: AlbumGroup? = nil
     var albumEditorialByKey: [String: AlbumEditorialInfo] = [:]
     var artistEditorialByKey: [String: ArtistEditorialInfo] = [:]
@@ -335,6 +404,7 @@ final class EchoStore {
     private var autoIndexTask: Task<Void, Never>?
     private var editorialSyncTask: Task<Void, Never>?
     private var volumeObservers: [NSObjectProtocol] = []
+    private var terminationObserver: NSObjectProtocol?
 
     init() {
         self.artworkCache = ArtworkCache()
@@ -344,10 +414,12 @@ final class EchoStore {
         self.popularityService = OnlinePopularityService()
         self.lidarrClient = LidarrClient()
         self.wirelessSyncServer = WirelessSyncServer(artworkCache: artworkCache)
+        self.partyModeServer = PartyModeServer(artworkCache: artworkCache)
         self.syncEngine = SyncEngine(artworkCache: artworkCache, podcastService: podcastService)
         self.player = AudioPlayerEngine()
 
         setupWirelessSyncServerCallbacks()
+        setupPartyModeCallbacks()
         loadPersistedState()
         setupPlayerSettingsPersistence()
         refreshMountedVolumes()
@@ -396,7 +468,7 @@ final class EchoStore {
     func openArtist(key: String) {
         let normalizedKey = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !normalizedKey.isEmpty else { return }
-        searchQuery = ""
+        clearGlobalSearch()
         isLidarrLibraryScope = false
         if resolveArtist(forKey: normalizedKey) == nil && selectedSourceID != nil {
             selectedSourceID = nil
@@ -463,6 +535,7 @@ final class EchoStore {
                     self.database.saveArtistEditorial(artistInfo)
                 }
                 self.fetchingEditorialKeys.remove(fetchKey)
+                self.refreshWirelessSyncServer()
             }
         }
     }
@@ -500,11 +573,21 @@ final class EchoStore {
             try? await Task.sleep(for: .seconds(12))
             while !Task.isCancelled {
                 guard let self else { return }
-                let staleAlbums = self.albums.filter { album in
+                let wirelessTrackIDs: Set<String> = Set(
+                    self.devices.filter(\.isVirtualWireless).flatMap { self.effectiveSelectedTrackIDs(for: $0) }
+                )
+                let prioritizedAlbums = self.albums.sorted { a, b in
+                    let aSynced = a.tracks.contains { wirelessTrackIDs.contains($0.id) }
+                    let bSynced = b.tracks.contains { wirelessTrackIDs.contains($0.id) }
+                    if aSynced != bSynced { return aSynced }
+                    return a.latestArrivalDate > b.latestArrivalDate
+                }
+                let staleAlbums = prioritizedAlbums.filter { album in
                     guard let existing = self.albumEditorialByKey[album.id] else { return true }
                     return existing.isStale
                 }.prefix(10)
 
+                var fetchedAny = false
                 for album in staleAlbums {
                     guard !Task.isCancelled else { return }
                     let fetchKey = "album:\(album.id)"
@@ -522,7 +605,11 @@ final class EchoStore {
                         self.database.saveArtistEditorial(artistInfo)
                     }
                     self.fetchingEditorialKeys.remove(fetchKey)
+                    fetchedAny = true
                     try? await Task.sleep(for: .milliseconds(1200))
+                }
+                if fetchedAny {
+                    self.refreshWirelessSyncServer()
                 }
 
                 // Sleep 6 hours between occasional background sync batches
@@ -560,7 +647,7 @@ final class EchoStore {
     func openAlbum(key: String) {
         let normalizedKey = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !normalizedKey.isEmpty else { return }
-        searchQuery = ""
+        clearGlobalSearch()
         isLidarrLibraryScope = false
         if albumsByKey[normalizedKey] == nil && selectedSourceID != nil {
             selectedSourceID = nil
@@ -707,6 +794,7 @@ final class EchoStore {
         devices = database.loadDevices()
         podcasts = database.loadPodcasts()
         trackStats = database.loadAllTrackStats()
+        albumRatings = database.loadAllAlbumRatings()
         artistStats = database.loadAllArtistStats()
         albumEditorialByKey = database.loadAllAlbumEditorial()
         artistEditorialByKey = database.loadAllArtistEditorial()
@@ -778,10 +866,88 @@ final class EchoStore {
         if let xfDurStr = database.getSetting("playerCrossfadeDuration"), let d = Double(xfDurStr) {
             player.crossfadeDuration = d
         }
+        if let savedOutputUID = database.getSetting("audioOutputDeviceUID"), !savedOutputUID.isEmpty {
+            player.selectedOutputDeviceUID = savedOutputUID
+        }
+        if let pauseCallStr = database.getSetting("playerAutoPauseOnCall") {
+            player.autoPauseOnCall = (pauseCallStr != "false")
+        }
+        if let resumeCallStr = database.getSetting("playerAutoResumeAfterCall") {
+            player.autoResumeAfterCall = (resumeCallStr != "false")
+        }
+        if let savedPartyPortStr = database.getSetting("partyPreferredPort"),
+           let parsedPort = UInt16(savedPartyPortStr),
+           parsedPort >= 1024 {
+            partyPreferredPort = parsedPort
+        }
+        if let partyChatStr = database.getSetting("partyChatEnabled") {
+            partyChatEnabled = (partyChatStr != "false")
+        }
+        if let partyStreamStr = database.getSetting("partyStreamingEnabled") {
+            partyStreamingEnabled = (partyStreamStr != "false")
+        }
+        if let maxIntroStr = database.getSetting("partyMaxIntroSeconds"),
+           let parsedSecs = Int(maxIntroStr) {
+            partyMaxIntroSeconds = max(5, min(60, parsedSecs))
+        }
 
         rebuildLibraryGroups()
         rebuildEpisodeMap()
         recomputeSyncPlan()
+        restorePersistedPlaybackQueue()
+    }
+
+    private struct PersistedPlaybackQueue: Codable {
+        var trackIDs: [String]
+        var nonLibraryTracks: [Track]
+        var currentIndex: Int
+        var currentTime: TimeInterval
+    }
+
+    private func persistPlaybackQueue() {
+        let queueTracks = player.queue
+        guard !queueTracks.isEmpty else {
+            database.setSetting("persistedPlaybackQueue", value: "")
+            return
+        }
+        let ids = queueTracks.map(\.id)
+        let extras = queueTracks.filter { tracksByID[$0.id] == nil }
+        let payload = PersistedPlaybackQueue(
+            trackIDs: ids,
+            nonLibraryTracks: extras,
+            currentIndex: player.currentIndex,
+            currentTime: player.currentTime
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .secondsSince1970
+        if let data = try? encoder.encode(payload),
+           let json = String(data: data, encoding: .utf8) {
+            database.setSetting("persistedPlaybackQueue", value: json)
+        }
+    }
+
+    private func restorePersistedPlaybackQueue() {
+        guard let json = database.getSetting("persistedPlaybackQueue"),
+              !json.isEmpty,
+              let data = json.data(using: .utf8) else { return }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        guard let saved = try? decoder.decode(PersistedPlaybackQueue.self, from: data),
+              !saved.trackIDs.isEmpty else { return }
+
+        let extrasByID = Dictionary(uniqueKeysWithValues: saved.nonLibraryTracks.map { ($0.id, $0) })
+        var resolved: [Track] = []
+        var remappedIndex = 0
+        for (idx, tid) in saved.trackIDs.enumerated() {
+            if let track = tracksByID[tid] ?? extrasByID[tid] {
+                if idx == saved.currentIndex {
+                    remappedIndex = resolved.count
+                }
+                resolved.append(track)
+            }
+        }
+        guard !resolved.isEmpty else { return }
+        player.restoreQueue(tracks: resolved, currentIndex: remappedIndex, resumeTime: saved.currentTime)
     }
 
     private func setupPlayerSettingsPersistence() {
@@ -792,10 +958,31 @@ final class EchoStore {
             self.database.setSetting("playerRepeat", value: self.player.repeatMode.rawValue)
             self.database.setSetting("playerCrossfadeEnabled", value: self.player.crossfadeEnabled ? "true" : "false")
             self.database.setSetting("playerCrossfadeDuration", value: String(self.player.crossfadeDuration))
+            self.database.setSetting("audioOutputDeviceUID", value: self.player.selectedOutputDeviceUID ?? "")
+            self.database.setSetting("playerAutoPauseOnCall", value: self.player.autoPauseOnCall ? "true" : "false")
+            self.database.setSetting("playerAutoResumeAfterCall", value: self.player.autoResumeAfterCall ? "true" : "false")
+        }
+        player.onQueueChanged = { [weak self] in
+            self?.persistPlaybackQueue()
+            self?.pushPartyModeStateToServer()
         }
         player.onTrackPlayed = { [weak self] track in
             guard let self else { return }
             self.recordUserPlay(for: track)
+        }
+        player.onArtworkDataForNowPlaying = { [weak self] hash in
+            guard let self, let hash else { return nil }
+            return self.artworkCache.loadThumbnailData(for: hash)
+        }
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.persistPlaybackQueue()
+                self?.partyModeServer.stop()
+            }
         }
     }
 
@@ -888,6 +1075,11 @@ final class EchoStore {
         }
         featuredTracksByArtistKey = featuredMap
         featuredDisplayNameByArtistKey = displayNameMap
+
+        if isPartyModeEnabled {
+            partyModeServer.updateLibrary(tracks: tracks)
+            pushPartyModeStateToServer()
+        }
     }
 
     private func rebuildEpisodeMap() {
@@ -1777,7 +1969,7 @@ final class EchoStore {
            device.selectedArtistKeys.contains(albumArtistKey) {
             return true
         }
-        for pl in playlists where device.selectedPlaylistIDs.contains(pl.id) {
+        for pl in syncablePlaylists where device.selectedPlaylistIDs.contains(pl.id) {
             if pl.trackIDs.contains(track.id) { return true }
         }
         return false
@@ -1941,6 +2133,10 @@ final class EchoStore {
                 label = albumsByKey[key]?.title ?? "album"
                 changed = true
             case .playlist(let plID):
+                if let pl = playlists.first(where: { $0.id == plID }), isPartyPlaylist(pl) {
+                    showToast("Partymode playlist is not synced to devices")
+                    continue
+                }
                 devices[idx].selectedPlaylistIDs.insert(plID)
                 label = playlists.first(where: { $0.id == plID })?.name ?? "playlist"
                 changed = true
@@ -1992,6 +2188,9 @@ final class EchoStore {
                 playlists[plIdx].updatedAt = Date()
                 database.savePlaylist(playlists[plIdx])
                 recomputeSyncPlan()
+                if isPartyModeEnabled && playlistID == partyPlaylistID {
+                    syncPartyPlaylistToPlayerAndServer(autoStartIfIdle: false)
+                }
                 return true
             }
         }
@@ -2008,6 +2207,9 @@ final class EchoStore {
         playlists[plIdx].updatedAt = Date()
         database.savePlaylist(playlists[plIdx])
         recomputeSyncPlan()
+        if isPartyModeEnabled && playlistID == partyPlaylistID {
+            syncPartyPlaylistToPlayerAndServer(autoStartIfIdle: partyAutoPlayOnRequest)
+        }
         showToast("Added \(toInsert.count) track\(toInsert.count == 1 ? "" : "s") to '\(playlists[plIdx].name)'")
         return true
     }
@@ -2039,6 +2241,10 @@ final class EchoStore {
     }
 
     func deletePlaylist(_ playlist: Playlist) {
+        if isPartyLockedPlaylist(playlist) {
+            showToast("Exit Party Mode before deleting '\(playlist.name)'", isError: true)
+            return
+        }
         playlists.removeAll { $0.id == playlist.id }
         database.deletePlaylist(id: playlist.id)
         for i in devices.indices {
@@ -2052,14 +2258,104 @@ final class EchoStore {
         if focusedPlaylistID == playlist.id {
             setFocusedPlaylist(playlists.first?.id)
         }
+        if partyPlaylistID == playlist.id {
+            partyPlaylistID = nil
+        }
         recomputeSyncPlan()
         showToast("Deleted playlist '\(playlist.name)'")
     }
 
+    @discardableResult
+    func duplicatePlaylist(_ playlist: Playlist) -> Playlist {
+        let existingNames = Set(playlists.map { $0.name.lowercased() })
+        let baseName = "\(playlist.name) Copy"
+        var candidate = baseName
+        var counter = 2
+        while existingNames.contains(candidate.lowercased()) {
+            candidate = "\(baseName) \(counter)"
+            counter += 1
+        }
+        let copy = Playlist(
+            name: candidate,
+            description: playlist.description,
+            trackIDs: playlist.trackIDs
+        )
+        playlists.append(copy)
+        database.savePlaylist(copy)
+        setFocusedPlaylist(copy.id)
+        navigate(to: .playlist(copy.id))
+        recomputeSyncPlan()
+        showToast("Duplicated '\(playlist.name)' → '\(copy.name)'")
+        return copy
+    }
+
+    func exportPlaylist(_ playlist: Playlist, format: PlaylistExportFormat = .pls) {
+        let playlistTracks = tracks(for: playlist)
+        let content: String
+        switch format {
+        case .pls:
+            var lines: [String] = ["[playlist]"]
+            for (i, track) in playlistTracks.enumerated() {
+                let n = i + 1
+                let artist = track.artist.isEmpty ? track.effectiveArtist : track.artist
+                let title = artist.isEmpty ? track.title : "\(artist) - \(track.title)"
+                let length = track.duration > 0 ? Int(track.duration.rounded()) : -1
+                lines.append("File\(n)=\(track.filePath)")
+                lines.append("Title\(n)=\(title)")
+                lines.append("Length\(n)=\(length)")
+            }
+            lines.append("NumberOfEntries=\(playlistTracks.count)")
+            lines.append("Version=2")
+            content = lines.joined(separator: "\n") + "\n"
+
+        case .m3u8:
+            var lines: [String] = ["#EXTM3U", "#PLAYLIST:\(playlist.name)"]
+            for track in playlistTracks {
+                let artist = track.artist.isEmpty ? track.effectiveArtist : track.artist
+                let title = artist.isEmpty ? track.title : "\(artist) - \(track.title)"
+                let length = track.duration > 0 ? Int(track.duration.rounded()) : -1
+                lines.append("#EXTINF:\(length),\(title)")
+                lines.append(track.filePath)
+            }
+            content = lines.joined(separator: "\n") + "\n"
+        }
+
+        let safeBase = playlist.name
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let defaultName = (safeBase.isEmpty ? "Playlist" : safeBase) + ".\(format.fileExtension)"
+
+        let panel = NSSavePanel()
+        panel.title = "Export Playlist (\(format.displayName))"
+        panel.nameFieldStringValue = defaultName
+        panel.canCreateDirectories = true
+        if let utType = UTType(filenameExtension: format.fileExtension) {
+            panel.allowedContentTypes = [utType]
+        }
+        panel.allowsOtherFileTypes = false
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try content.write(to: url, atomically: true, encoding: .utf8)
+            showToast("Exported '\(playlist.name)' (\(playlistTracks.count) tracks) to \(url.lastPathComponent)")
+        } catch {
+            showToast("Failed to export playlist: \(error.localizedDescription)", isError: true)
+        }
+    }
+
     func addTracks(_ newTracks: [Track], toPlaylistID playlistID: UUID) {
         guard let idx = playlists.firstIndex(where: { $0.id == playlistID }) else { return }
+        let isLockedParty = isPartyModeEnabled && playlistID == partyPlaylistID
         let existing = Set(playlists[idx].trackIDs)
-        let toAdd = newTracks.map(\.id).filter { !existing.contains($0) }
+        let toAdd: [String]
+        if isLockedParty && partyAllowReRequestPlayed {
+            let curIdx = player.currentTrack != nil ? player.currentIndex : 0
+            let upcoming = Set(playlists[idx].trackIDs.dropFirst(max(0, min(curIdx, playlists[idx].trackIDs.count))))
+            toAdd = newTracks.map(\.id).filter { !upcoming.contains($0) }
+        } else {
+            toAdd = newTracks.map(\.id).filter { !existing.contains($0) }
+        }
         guard !toAdd.isEmpty else {
             showToast("Tracks already in '\(playlists[idx].name)'")
             return
@@ -2068,6 +2364,9 @@ final class EchoStore {
         playlists[idx].updatedAt = Date()
         database.savePlaylist(playlists[idx])
         recomputeSyncPlan()
+        if isLockedParty {
+            syncPartyPlaylistToPlayerAndServer(autoStartIfIdle: partyAutoPlayOnRequest)
+        }
         showToast("Added \(toAdd.count) track\(toAdd.count == 1 ? "" : "s") to '\(playlists[idx].name)'")
     }
 
@@ -2078,6 +2377,9 @@ final class EchoStore {
         playlists[idx].updatedAt = Date()
         database.savePlaylist(playlists[idx])
         recomputeSyncPlan()
+        if isPartyModeEnabled && playlistID == partyPlaylistID {
+            syncPartyPlaylistToPlayerAndServer(autoStartIfIdle: false)
+        }
     }
 
     func moveTracksInPlaylist(playlistID: UUID, from source: IndexSet, to destination: Int) {
@@ -2086,10 +2388,875 @@ final class EchoStore {
         playlists[idx].updatedAt = Date()
         database.savePlaylist(playlists[idx])
         recomputeSyncPlan()
+        if isPartyModeEnabled && playlistID == partyPlaylistID {
+            syncPartyPlaylistToPlayerAndServer(autoStartIfIdle: false)
+        }
     }
 
     func tracks(for playlist: Playlist) -> [Track] {
         playlist.trackIDs.compactMap { tracksByID[$0] }
+    }
+
+    // MARK: - Party Mode (Dynamic "Partymode" Playlist & Random-Port Guest Web Server)
+
+    var partyPlaylist: Playlist? {
+        if let id = partyPlaylistID, let pl = playlists.first(where: { $0.id == id }) {
+            return pl
+        }
+        return playlists.first(where: { $0.name.caseInsensitiveCompare(Self.partyPlaylistName) == .orderedSame })
+    }
+
+    var partyServerURLString: String? {
+        guard isPartyModeEnabled, partyServerPort > 0 else { return nil }
+        let host = partyServerLANIP ?? "localhost"
+        return "http://\(host):\(partyServerPort)"
+    }
+
+    var partyLocalURLString: String? {
+        guard isPartyModeEnabled, partyServerPort > 0 else { return nil }
+        return "http://localhost:\(partyServerPort)"
+    }
+
+    func isPartyPlaylist(_ playlist: Playlist) -> Bool {
+        if let id = partyPlaylistID, playlist.id == id {
+            return true
+        }
+        return playlist.name.caseInsensitiveCompare(Self.partyPlaylistName) == .orderedSame
+    }
+
+    var syncablePlaylists: [Playlist] {
+        playlists.filter { !isPartyPlaylist($0) }
+    }
+
+    func isPartyLockedPlaylist(_ playlist: Playlist) -> Bool {
+        isPartyModeEnabled && playlist.id == partyPlaylistID
+    }
+
+    func partyRequesterName(for trackID: String) -> String? {
+        partyRequesterByTrackID[trackID]?.guestName
+    }
+
+    private func setupPartyModeCallbacks() {
+        partyModeServer.onStatusChanged = { [weak self] running, port, lanIP, errorMessage in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.isPartyServerRunning = running
+                self.partyServerPort = port
+                if running {
+                    self.partyServerLANIP = lanIP ?? WirelessSyncServer.localLANIPAddress()
+                    self.partyServerLastError = nil
+                    if port > 0 && self.partyPreferredPort != port {
+                        self.partyPreferredPort = port
+                        self.database.setSetting("partyPreferredPort", value: String(port))
+                    }
+                } else {
+                    self.partyServerLastError = errorMessage
+                }
+            }
+        }
+
+        partyModeServer.onAddTrack = { [weak self] trackID, guestName, guestID in
+            guard let self else {
+                return PartyAddTrackResponse(ok: false, message: "Host app unavailable")
+            }
+            return await MainActor.run {
+                self.addTrackToPartyMode(trackID: trackID, guestName: guestName, guestID: guestID, fromHost: false)
+            }
+        }
+
+        partyModeServer.onRenameGuest = { [weak self] guestID, newName in
+            guard let self else {
+                return PartyRenameGuestResponse(ok: false, guestName: "Guest")
+            }
+            return await MainActor.run {
+                self.renamePartyGuest(guestID: guestID, newName: newName)
+            }
+        }
+
+        partyModeServer.onSendChatMessage = { [weak self] guestID, guestName, text in
+            guard let self else {
+                return PartyChatSendResponse(ok: false, message: "Host app unavailable")
+            }
+            return await MainActor.run {
+                self.sendPartyChatMessage(text: text, guestID: guestID, guestName: guestName, isHost: false)
+            }
+        }
+
+        partyModeServer.onUploadVoiceIntro = { [weak self] trackID, guestID, guestName, audioData, ext in
+            guard let self else {
+                return PartyIntroUploadResponse(ok: false, message: "Host app unavailable")
+            }
+            return await MainActor.run {
+                self.savePartyVoiceIntro(
+                    trackID: trackID,
+                    guestID: guestID,
+                    guestName: guestName,
+                    audioData: audioData,
+                    fileExtension: ext
+                )
+            }
+        }
+
+        partyModeServer.onDeleteVoiceIntro = { [weak self] trackID, guestID in
+            guard let self else {
+                return PartyIntroUploadResponse(ok: false, message: "Host app unavailable")
+            }
+            return await MainActor.run {
+                self.deletePartyVoiceIntro(trackID: trackID, guestID: guestID, fromHost: false)
+            }
+        }
+
+        partyModeServer.onFetchTrackInfo = { [weak self] trackID in
+            guard let self else { return nil }
+            return await self.fetchPartyTrackInfo(trackID: trackID)
+        }
+
+        partyModeServer.onGuestsChanged = { [weak self] guests in
+            Task { @MainActor [weak self] in
+                self?.partyGuests = guests
+            }
+        }
+    }
+
+    @discardableResult
+    func ensurePartyPlaylist() -> Playlist {
+        if let existing = partyPlaylist {
+            partyPlaylistID = existing.id
+            return existing
+        }
+        let created = Playlist(
+            name: Self.partyPlaylistName,
+            description: "Dynamic Party Mode queue — guests can search & add tracks from the web jukebox."
+        )
+        playlists.append(created)
+        database.savePlaylist(created)
+        partyPlaylistID = created.id
+        recomputeSyncPlan()
+        return created
+    }
+
+    func startPartyMode(navigateToView: Bool = true) {
+        let pl = ensurePartyPlaylist()
+        isPartyModeEnabled = true
+        partyPlaylistID = pl.id
+        partyServerLastError = nil
+        setFocusedPlaylist(pl.id)
+
+        // Lock playback queue onto dynamic "Partymode" playlist in strict FIFO order
+        if player.isShuffled {
+            player.isShuffled = false
+        }
+        player.isQueueLocked = true
+        player.ignoreMicInputAutoPause = true
+        player.onLockedQueuePlayRequest = { [weak self] tracks, startingAt in
+            guard let self, startingAt >= 0, startingAt < tracks.count else { return }
+            let chosen = tracks[startingAt]
+            let response = self.addTrackToPartyMode(trackID: chosen.id, guestName: "Host", fromHost: true)
+            self.showToast(response.message, isError: !response.ok)
+        }
+        player.onLockedQueueAppendRequest = { [weak self] track, playNext in
+            guard let self else { return }
+            self.insertTrackIntoPartyMode(track, playNext: playNext, guestName: "Host")
+        }
+        player.onLockedQueueRemoveRequest = { [weak self] index in
+            guard let self, let plID = self.partyPlaylistID else { return }
+            self.removeTrack(at: index, fromPlaylistID: plID)
+        }
+        player.onVoiceIntroURLForTrack = { [weak self] trackID in
+            self?.partyVoiceIntrosByTrackID[trackID]?.fileURL
+        }
+        player.onVoiceIntroStarted = { [weak self] trackID in
+            guard let self else { return }
+            if let rec = self.partyVoiceIntrosByTrackID.removeValue(forKey: trackID) {
+                let title = self.tracksByID[trackID]?.title ?? "next track"
+                self.showToast("🎙 Playing \(Int(rec.duration.rounded()))s intro by \(rec.guestName) for '\(title)'")
+                // Keep file briefly while AVAudioPlayer finishes playing, then clean up
+                let urlToClean = rec.fileURL
+                Task {
+                    try? await Task.sleep(for: .seconds(max(20, rec.duration + 10)))
+                    try? FileManager.default.removeItem(at: urlToClean)
+                }
+                self.pushPartyModeStateToServer()
+            }
+        }
+
+        let plTracks = tracks(for: pl)
+        if plTracks.isEmpty {
+            player.syncLockedQueue(tracks: [], autoStartIfIdle: false)
+        } else if let cur = player.currentTrack, plTracks.contains(where: { $0.id == cur.id }) {
+            player.syncLockedQueue(tracks: plTracks, autoStartIfIdle: false)
+        } else {
+            player.playLockedQueue(tracks: plTracks, startingAt: 0)
+        }
+
+        partyModeServer.updateLibrary(tracks: tracks)
+        pushPartyModeStateToServer()
+        partyModeServer.start(preferredPort: partyPreferredPort, fallbackToRandomIfBusy: true)
+        startPartyPresenceTicker()
+
+        if navigateToView {
+            searchQuery = ""
+            isLidarrLibraryScope = false
+            navigate(to: .partyMode)
+        }
+        showToast("Party Mode started — locked to '\(pl.name)'")
+    }
+
+    func stopPartyMode() {
+        isPartyModeEnabled = false
+        partyPresenceTask?.cancel()
+        partyPresenceTask = nil
+        player.isQueueLocked = false
+        player.ignoreMicInputAutoPause = false
+        player.onLockedQueuePlayRequest = nil
+        player.onLockedQueueAppendRequest = nil
+        player.onLockedQueueRemoveRequest = nil
+        player.onVoiceIntroURLForTrack = nil
+        player.onVoiceIntroStarted = nil
+        partyModeServer.stop()
+        partyModeServer.clearGuestPresence()
+        partyGuests = []
+        isPartyServerRunning = false
+        partyServerPort = 0
+        partyServerLastError = nil
+        showToast("Party Mode stopped — web server closed")
+    }
+
+    private func startPartyPresenceTicker() {
+        partyPresenceTask?.cancel()
+        partyPresenceTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled, let self, self.isPartyModeEnabled else { return }
+                self.partyGuests = self.partyModeServer.snapshotGuests()
+                self.pushPartyModeStateToServer()
+            }
+        }
+    }
+
+    func setPartyChatEnabled(_ enabled: Bool) {
+        partyChatEnabled = enabled
+        database.setSetting("partyChatEnabled", value: enabled ? "true" : "false")
+        pushPartyModeStateToServer()
+        showToast(enabled ? "Party Chat enabled" : "Party Chat disabled")
+    }
+
+    func setPartyStreamingEnabled(_ enabled: Bool) {
+        partyStreamingEnabled = enabled
+        database.setSetting("partyStreamingEnabled", value: enabled ? "true" : "false")
+        pushPartyModeStateToServer()
+        showToast(enabled
+            ? "Remote Listen-Along streaming enabled — guests can tap Listen to stream live"
+            : "Remote Listen-Along streaming disabled")
+    }
+
+    func setPartyMaxIntroSeconds(_ seconds: Int) {
+        let clamped = max(5, min(60, seconds))
+        partyMaxIntroSeconds = clamped
+        database.setSetting("partyMaxIntroSeconds", value: String(clamped))
+        pushPartyModeStateToServer()
+        showToast("Max guest voice intro set to \(clamped)s")
+    }
+
+    private var partyIntrosDirectoryURL: URL {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let dir = caches.appendingPathComponent("Echo/PartyIntros", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    @discardableResult
+    func savePartyVoiceIntro(
+        trackID: String,
+        guestID: String?,
+        guestName: String?,
+        audioData: Data,
+        fileExtension: String
+    ) -> PartyIntroUploadResponse {
+        guard let pl = partyPlaylist, pl.trackIDs.contains(trackID), let track = tracksByID[trackID] else {
+            return PartyIntroUploadResponse(ok: false, message: "Track is not in the Partymode queue")
+        }
+
+        // Verify requestor ownership when guestID is tracked
+        if let ownerID = partyRequesterByTrackID[trackID]?.guestID,
+           let incomingID = guestID,
+           ownerID != incomingID {
+            return PartyIntroUploadResponse(ok: false, message: "Only the guest who requested this track can record its intro")
+        }
+
+        let safeExt = ["wav", "m4a", "mp3", "aac", "caf"].contains(fileExtension.lowercased()) ? fileExtension.lowercased() : "wav"
+        let baseID = UUID().uuidString
+        let rawURL = partyIntrosDirectoryURL.appendingPathComponent("\(baseID)-raw.\(safeExt)")
+        let normalizedURL = partyIntrosDirectoryURL.appendingPathComponent("\(baseID).wav")
+
+        do {
+            try audioData.write(to: rawURL, options: .atomic)
+            let validator = try AVAudioPlayer(contentsOf: rawURL)
+            var duration = validator.duration
+            guard duration >= 0.25 else {
+                try? FileManager.default.removeItem(at: rawURL)
+                return PartyIntroUploadResponse(ok: false, message: "Recording was too short — hold/record for at least 1 second")
+            }
+            let maxAllowed = Double(partyMaxIntroSeconds) + 1.5
+            guard duration <= maxAllowed else {
+                try? FileManager.default.removeItem(at: rawURL)
+                return PartyIntroUploadResponse(ok: false, message: "Intro exceeds host limit of \(partyMaxIntroSeconds)s")
+            }
+
+            // Normalize voice loudness (-13.2 dBFS active speech + -1.0 dBFS soft-knee limiter)
+            let finalURL: URL
+            if let normalizedDuration = try? VoiceIntroAudioNormalizer.normalizeAudioFile(inputURL: rawURL, outputURL: normalizedURL),
+               normalizedDuration >= 0.25 {
+                try? FileManager.default.removeItem(at: rawURL)
+                finalURL = normalizedURL
+                duration = normalizedDuration
+            } else {
+                try? FileManager.default.removeItem(at: normalizedURL)
+                finalURL = rawURL
+            }
+
+            if let old = partyVoiceIntrosByTrackID[trackID] {
+                try? FileManager.default.removeItem(at: old.fileURL)
+            }
+            let displayGuest = PartyModeServer.sanitizeGuestName(guestName)
+                ?? partyRequesterByTrackID[trackID]?.guestName
+                ?? "Guest"
+            let record = PartyVoiceIntroRecord(
+                trackID: trackID,
+                fileURL: finalURL,
+                duration: duration,
+                guestID: guestID ?? partyRequesterByTrackID[trackID]?.guestID,
+                guestName: displayGuest,
+                recordedAt: Date()
+            )
+            partyVoiceIntrosByTrackID[trackID] = record
+            pushPartyModeStateToServer()
+            showToast("🎙 \(displayGuest) added a \(Int(duration.rounded()))s intro for '\(track.title)'")
+            return PartyIntroUploadResponse(
+                ok: true,
+                message: "Saved \(Int(duration.rounded()))s intro for '\(track.title)'!",
+                duration: duration,
+                state: buildPartyPlaylistState()
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: rawURL)
+            try? FileManager.default.removeItem(at: normalizedURL)
+            return PartyIntroUploadResponse(ok: false, message: "Unsupported or unreadable intro audio format")
+        }
+    }
+
+    @discardableResult
+    func deletePartyVoiceIntro(trackID: String, guestID: String? = nil, fromHost: Bool = false) -> PartyIntroUploadResponse {
+        guard let existing = partyVoiceIntrosByTrackID[trackID] else {
+            return PartyIntroUploadResponse(ok: true, message: "No intro found", state: buildPartyPlaylistState())
+        }
+        if !fromHost, let ownerID = existing.guestID, let incomingID = guestID, ownerID != incomingID {
+            return PartyIntroUploadResponse(ok: false, message: "Only the requestor or host can remove this intro")
+        }
+        partyVoiceIntrosByTrackID.removeValue(forKey: trackID)
+        try? FileManager.default.removeItem(at: existing.fileURL)
+        pushPartyModeStateToServer()
+        return PartyIntroUploadResponse(ok: true, message: "Removed voice intro", state: buildPartyPlaylistState())
+    }
+
+    func fetchPartyTrackInfo(trackID: String) async -> PartyTrackInfoResponse? {
+        guard let track = tracksByID[trackID] else { return nil }
+
+        let displayArtist = track.artist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? track.effectiveArtist
+            : track.artist
+        let albumGroup = albums.first(where: { $0.tracks.contains(where: { $0.id == trackID }) })
+        let resolvedAlbumTitle = albumGroup?.title ?? track.effectiveAlbum
+        let resolvedAlbumArtist = albumGroup?.artist ?? track.effectiveArtist
+        let albumKey = albumGroup?.id ?? track.albumKey
+        let artistKey = resolvedAlbumArtist.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        let matchingArtistGroup = artists.first(where: {
+            $0.name.caseInsensitiveCompare(displayArtist) == .orderedSame
+                || $0.name.caseInsensitiveCompare(resolvedAlbumArtist) == .orderedSame
+        })
+        let localArtistAlbumCount = matchingArtistGroup?.albums.count ?? (albumGroup != nil ? 1 : 0)
+        let localArtistTrackCount = matchingArtistGroup?.albums.reduce(0) { $0 + $1.tracks.count } ?? (albumGroup?.tracks.count ?? 1)
+        let albumTrackCount = albumGroup?.tracks.count ?? 1
+        let addedBy = partyRequesterByTrackID[trackID]?.guestName
+
+        var albumInfo = albumEditorialByKey[albumKey]
+        var artistInfo = artistEditorialByKey[artistKey]
+
+        // Fetch on-demand if missing or stale so guests get rich album + artist info in the lightbox
+        if albumInfo == nil || albumInfo?.isStale == true {
+            let fetched = await EditorialInfoFetcher.fetchAlbumEditorial(
+                albumKey: albumKey,
+                artist: resolvedAlbumArtist,
+                albumTitle: resolvedAlbumTitle
+            )
+            albumEditorialByKey[albumKey] = fetched.album
+            database.saveAlbumEditorial(fetched.album)
+            albumInfo = fetched.album
+            if let fetchedArtist = fetched.artist {
+                artistEditorialByKey[fetchedArtist.artistKey] = fetchedArtist
+                database.saveArtistEditorial(fetchedArtist)
+                artistInfo = fetchedArtist
+            }
+        }
+
+        if (artistInfo?.summary == nil || artistInfo?.summary?.isEmpty == true)
+            && (albumInfo?.artistSummary == nil || albumInfo?.artistSummary?.isEmpty == true)
+            && (artistInfo == nil || artistInfo?.isStale == true) {
+            let fetchedArtist = await EditorialInfoFetcher.fetchArtistEditorial(
+                artistKey: artistKey,
+                artistName: displayArtist
+            )
+            artistEditorialByKey[artistKey] = fetchedArtist
+            database.saveArtistEditorial(fetchedArtist)
+            artistInfo = fetchedArtist
+        }
+
+        let resolvedArtistSummary = (artistInfo?.summary?.isEmpty == false ? artistInfo?.summary : nil)
+            ?? (albumInfo?.artistSummary?.isEmpty == false ? albumInfo?.artistSummary : nil)
+        let resolvedArtistFans = artistInfo?.fans ?? albumInfo?.artistFans
+        let resolvedArtistAlbums = artistInfo?.albumCount ?? albumInfo?.artistAlbumCount
+        let resolvedArtistImage = artistInfo?.imageURL ?? albumInfo?.artistImageURL
+
+        return PartyTrackInfoResponse(
+            ok: true,
+            trackId: track.id,
+            title: track.title,
+            artist: displayArtist,
+            album: resolvedAlbumTitle,
+            year: track.year,
+            duration: track.duration,
+            format: track.format.displayBadge,
+            artworkHash: track.artworkHash,
+            addedBy: addedBy,
+            releaseDate: albumInfo?.releaseDate,
+            label: albumInfo?.label,
+            genres: albumInfo?.genres ?? [],
+            albumFans: albumInfo?.albumFans,
+            albumSummary: albumInfo?.albumSummary,
+            albumTrackCount: albumTrackCount,
+            artistSummary: resolvedArtistSummary,
+            artistFans: resolvedArtistFans,
+            artistAlbumCount: resolvedArtistAlbums,
+            artistImageURL: resolvedArtistImage,
+            localArtistAlbumCount: localArtistAlbumCount,
+            localArtistTrackCount: localArtistTrackCount
+        )
+    }
+
+    @discardableResult
+    func sendPartyChatMessage(text: String, guestID: String? = nil, guestName: String? = nil, isHost: Bool = false) -> PartyChatSendResponse {
+        guard partyChatEnabled else {
+            return PartyChatSendResponse(ok: false, message: "Party chat is currently disabled by the host")
+        }
+        guard let cleanText = PartyModeServer.sanitizeChatText(text) else {
+            return PartyChatSendResponse(ok: false, message: "Message cannot be empty")
+        }
+        let sender = isHost
+            ? "Host"
+            : (PartyModeServer.sanitizeGuestName(guestName) ?? "Guest")
+        let normalizedGuestID = isHost ? nil : PartyModeServer.sanitizeGuestID(guestID)
+        let msg = PartyChatMessage(
+            guestID: normalizedGuestID,
+            senderName: sender,
+            isHost: isHost,
+            text: cleanText,
+            sentAt: Date()
+        )
+        partyChatMessages.append(msg)
+        if partyChatMessages.count > 120 {
+            partyChatMessages = Array(partyChatMessages.suffix(120))
+        }
+        pushPartyModeStateToServer()
+        return PartyChatSendResponse(ok: true, chatMessage: msg, state: buildPartyPlaylistState())
+    }
+
+    func clearPartyChat() {
+        partyChatMessages.removeAll()
+        pushPartyModeStateToServer()
+        showToast("Cleared Party Chat messages")
+    }
+
+    func togglePartyMode() {
+        if isPartyModeEnabled {
+            stopPartyMode()
+        } else {
+            startPartyMode(navigateToView: true)
+        }
+    }
+
+    func restartPartyServerOnNewPort() {
+        partyPreferredPort = nil
+        database.setSetting("partyPreferredPort", value: "")
+        guard isPartyModeEnabled else {
+            showToast("Party Mode port reset to Random")
+            return
+        }
+        partyServerLastError = nil
+        partyModeServer.restart(preferredPort: nil)
+        showToast("Restarting Party Mode server on a new random port...")
+    }
+
+    /// Sets a custom unprivileged port (1024–65535) or resets to default `53333` when blank, restarting live if Party Mode is active.
+    @discardableResult
+    func setPartyPort(_ rawInput: String) -> Bool {
+        let trimmed = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            let fallback = Self.defaultPartyPort
+            partyPreferredPort = fallback
+            database.setSetting("partyPreferredPort", value: String(fallback))
+            partyServerLastError = nil
+            if isPartyModeEnabled {
+                partyModeServer.restart(preferredPort: fallback, fallbackToRandomIfBusy: true)
+                showToast("Party Mode reset to default port \(fallback)")
+            } else {
+                showToast("Party Mode port reset to \(fallback)")
+            }
+            return true
+        }
+
+        guard let parsed = Int(trimmed), parsed >= 1024 && parsed <= 65535 else {
+            showToast("Enter a valid port between 1024 and 65535 (or leave blank for default 53333)", isError: true)
+            return false
+        }
+
+        let port = UInt16(parsed)
+        partyPreferredPort = port
+        database.setSetting("partyPreferredPort", value: String(port))
+        partyServerLastError = nil
+
+        if isPartyModeEnabled {
+            partyModeServer.restart(preferredPort: port)
+            showToast("Restarting Party Mode server on port \(port)...")
+        } else {
+            showToast("Party Mode port set to \(port)")
+        }
+        return true
+    }
+
+    func playPartyModeTrack(at index: Int) {
+        let pl = ensurePartyPlaylist()
+        let plTracks = tracks(for: pl)
+        guard index >= 0 && index < plTracks.count else { return }
+        if isPartyModeEnabled {
+            player.playLockedQueue(tracks: plTracks, startingAt: index)
+            pushPartyModeStateToServer()
+        } else {
+            player.play(tracks: plTracks, startingAt: index)
+        }
+    }
+
+    @discardableResult
+    func addTrackToPartyMode(trackID: String, guestName: String?, guestID: String? = nil, fromHost: Bool = false) -> PartyAddTrackResponse {
+        guard let track = tracksByID[trackID], track.isAvailable else {
+            return PartyAddTrackResponse(ok: false, message: "Track is unavailable in library")
+        }
+
+        let pl = ensurePartyPlaylist()
+        guard let plIdx = playlists.firstIndex(where: { $0.id == pl.id }) else {
+            return PartyAddTrackResponse(ok: false, message: "Partymode playlist not found")
+        }
+
+        let currentIDs = playlists[plIdx].trackIDs
+        let activeIdx = (player.currentTrack != nil) ? max(0, min(player.currentIndex, currentIDs.count)) : 0
+        let upNextSlice = currentIDs.dropFirst(activeIdx)
+
+        // Prevent duplicate in currently-playing or upcoming queue
+        if upNextSlice.contains(track.id) {
+            let state = buildPartyPlaylistState()
+            return PartyAddTrackResponse(
+                ok: true,
+                alreadyQueued: true,
+                message: "'\(track.title)' is already up next in Partymode",
+                position: currentIDs.lastIndex(of: track.id),
+                track: PartyTrackItem(from: track, inPlaylist: true, inUpNext: true),
+                state: state
+            )
+        }
+
+        // If already played earlier and re-requesting is disabled, block duplicate
+        if !partyAllowReRequestPlayed && currentIDs.contains(track.id) {
+            let state = buildPartyPlaylistState()
+            return PartyAddTrackResponse(
+                ok: true,
+                alreadyQueued: true,
+                message: "'\(track.title)' was already played in Partymode",
+                position: currentIDs.firstIndex(of: track.id),
+                track: PartyTrackItem(from: track, inPlaylist: true, inUpNext: false),
+                state: state
+            )
+        }
+
+        let now = Date()
+        let displayGuest = PartyModeServer.sanitizeGuestName(guestName) ?? (fromHost ? "Host" : "Guest")
+        let normalizedGuestID = fromHost ? nil : PartyModeServer.sanitizeGuestID(guestID)
+        playlists[plIdx].trackIDs.append(track.id)
+        playlists[plIdx].updatedAt = now
+        database.savePlaylist(playlists[plIdx])
+        recomputeSyncPlan()
+
+        partyRequesterByTrackID[track.id] = (normalizedGuestID, displayGuest, now)
+        let activity = PartyGuestActivityItem(
+            trackID: track.id,
+            trackTitle: track.title,
+            artist: track.artist.isEmpty ? track.effectiveArtist : track.artist,
+            guestID: normalizedGuestID,
+            guestName: displayGuest,
+            addedAt: now
+        )
+        partyGuestActivity.insert(activity, at: 0)
+        if partyGuestActivity.count > 100 {
+            partyGuestActivity = Array(partyGuestActivity.prefix(100))
+        }
+
+        let newPosition = playlists[plIdx].trackIDs.count - 1
+        if isPartyModeEnabled {
+            syncPartyPlaylistToPlayerAndServer(autoStartIfIdle: partyAutoPlayOnRequest)
+        }
+
+        let updatedState = buildPartyPlaylistState()
+        if !fromHost {
+            showToast("Party Mode: \(displayGuest) added '\(track.title)'")
+        }
+        return PartyAddTrackResponse(
+            ok: true,
+            alreadyQueued: false,
+            message: "Added '\(track.title)' to Partymode (#\(newPosition + 1))",
+            position: newPosition,
+            track: PartyTrackItem(from: track, inPlaylist: true, inUpNext: true),
+            state: updatedState
+        )
+    }
+
+    @discardableResult
+    func renamePartyGuest(guestID: String, newName: String?) -> PartyRenameGuestResponse {
+        let displayGuest = PartyModeServer.sanitizeGuestName(newName) ?? "Guest"
+        var updatedTracks = 0
+
+        for (trackID, info) in partyRequesterByTrackID where info.guestID == guestID {
+            partyRequesterByTrackID[trackID] = (info.guestID, displayGuest, info.addedAt)
+            updatedTracks += 1
+        }
+
+        var updatedActivity = 0
+        for idx in partyGuestActivity.indices where partyGuestActivity[idx].guestID == guestID {
+            partyGuestActivity[idx].guestName = displayGuest
+            updatedActivity += 1
+        }
+
+        var updatedChat = 0
+        for idx in partyChatMessages.indices where partyChatMessages[idx].guestID == guestID {
+            partyChatMessages[idx].senderName = displayGuest
+            updatedChat += 1
+        }
+
+        for (tid, rec) in partyVoiceIntrosByTrackID where rec.guestID == guestID {
+            var copy = rec
+            copy.guestName = displayGuest
+            partyVoiceIntrosByTrackID[tid] = copy
+        }
+
+        partyModeServer.renameGuestPresence(guestID: guestID, newName: displayGuest)
+        partyGuests = partyModeServer.snapshotGuests()
+
+        let updatedCount = max(updatedTracks, updatedActivity)
+        if updatedCount > 0 || updatedChat > 0 {
+            pushPartyModeStateToServer()
+        }
+        let latestState = buildPartyPlaylistState()
+        return PartyRenameGuestResponse(
+            ok: true,
+            updatedCount: updatedCount,
+            guestName: displayGuest,
+            state: latestState
+        )
+    }
+
+    private func insertTrackIntoPartyMode(_ track: Track, playNext: Bool, guestName: String) {
+        if !playNext {
+            let resp = addTrackToPartyMode(trackID: track.id, guestName: guestName, fromHost: true)
+            showToast(resp.message, isError: !resp.ok)
+            return
+        }
+        let pl = ensurePartyPlaylist()
+        guard let plIdx = playlists.firstIndex(where: { $0.id == pl.id }) else { return }
+        let insertIdx: Int
+        if player.currentTrack != nil {
+            insertIdx = min(player.currentIndex + 1, playlists[plIdx].trackIDs.count)
+        } else {
+            insertIdx = 0
+        }
+        playlists[plIdx].trackIDs.insert(track.id, at: insertIdx)
+        playlists[plIdx].updatedAt = Date()
+        database.savePlaylist(playlists[plIdx])
+        recomputeSyncPlan()
+        partyRequesterByTrackID[track.id] = (nil, guestName, Date())
+        if isPartyModeEnabled {
+            syncPartyPlaylistToPlayerAndServer(autoStartIfIdle: partyAutoPlayOnRequest)
+        }
+        showToast("Party Mode: '\(track.title)' queued next in Partymode")
+    }
+
+    func clearPlayedPartyTracks() {
+        guard let pl = partyPlaylist,
+              let plIdx = playlists.firstIndex(where: { $0.id == pl.id }) else { return }
+        guard player.currentTrack != nil, player.currentIndex > 0 else {
+            showToast("No played tracks to clear")
+            return
+        }
+        let removeCount = min(player.currentIndex, playlists[plIdx].trackIDs.count)
+        guard removeCount > 0 else { return }
+        playlists[plIdx].trackIDs.removeFirst(removeCount)
+        playlists[plIdx].updatedAt = Date()
+        database.savePlaylist(playlists[plIdx])
+        recomputeSyncPlan()
+        if isPartyModeEnabled {
+            syncPartyPlaylistToPlayerAndServer(autoStartIfIdle: false)
+        }
+        showToast("Cleared \(removeCount) played track\(removeCount == 1 ? "" : "s") from Partymode")
+    }
+
+    func clearAllPartyTracks() {
+        guard let pl = partyPlaylist,
+              let plIdx = playlists.firstIndex(where: { $0.id == pl.id }) else { return }
+        playlists[plIdx].trackIDs.removeAll()
+        playlists[plIdx].updatedAt = Date()
+        database.savePlaylist(playlists[plIdx])
+        partyRequesterByTrackID.removeAll()
+        for rec in partyVoiceIntrosByTrackID.values {
+            try? FileManager.default.removeItem(at: rec.fileURL)
+        }
+        partyVoiceIntrosByTrackID.removeAll()
+        recomputeSyncPlan()
+        if isPartyModeEnabled {
+            syncPartyPlaylistToPlayerAndServer(autoStartIfIdle: false)
+        }
+        showToast("Cleared all tracks from Partymode")
+    }
+
+    func seedPartyModeWithCurrentQueue() {
+        guard !player.queue.isEmpty else { return }
+        let pl = ensurePartyPlaylist()
+        addTracks(player.queue, toPlaylistID: pl.id)
+    }
+
+    private func syncPartyPlaylistToPlayerAndServer(autoStartIfIdle: Bool) {
+        guard isPartyModeEnabled, let pl = partyPlaylist else { return }
+        let plTracks = tracks(for: pl)
+        player.syncLockedQueue(tracks: plTracks, autoStartIfIdle: autoStartIfIdle)
+        pushPartyModeStateToServer()
+    }
+
+    func pushPartyModeStateToServer() {
+        guard isPartyModeEnabled else { return }
+        partyStateRevision += 1
+        partyModeServer.updatePlaylistState(buildPartyPlaylistState())
+    }
+
+    /// Computes planned wall-clock start times (`Date`) for upcoming tracks in "Partymode".
+    func plannedPlayTimesForPartymode(now: Date = Date()) -> [Int: Date] {
+        guard let pl = partyPlaylist else { return [:] }
+        let plTracks = tracks(for: pl)
+        guard !plTracks.isEmpty else { return [:] }
+
+        let curIdx: Int? = {
+            guard player.currentTrack != nil else { return nil }
+            if player.currentIndex >= 0 && player.currentIndex < plTracks.count && plTracks[player.currentIndex].id == player.currentTrack?.id {
+                return player.currentIndex
+            }
+            return plTracks.firstIndex(where: { $0.id == player.currentTrack?.id })
+        }()
+
+        var result: [Int: Date] = [:]
+        var cursor = now
+
+        if let cur = curIdx {
+            let activeDuration = player.duration > 0 ? player.duration : plTracks[cur].duration
+            let remaining = max(0, activeDuration - player.currentTime)
+            cursor = cursor.addingTimeInterval(remaining)
+            if cur + 1 < plTracks.count {
+                for idx in (cur + 1)..<plTracks.count {
+                    result[idx] = cursor
+                    cursor = cursor.addingTimeInterval(max(0, plTracks[idx].duration))
+                }
+            }
+        } else {
+            for idx in plTracks.indices {
+                result[idx] = cursor
+                cursor = cursor.addingTimeInterval(max(0, plTracks[idx].duration))
+            }
+        }
+        return result
+    }
+
+    private func buildPartyPlaylistState() -> PartyPlaylistState {
+        let now = Date()
+        let pl = partyPlaylist
+        let plTracks = pl.map { tracks(for: $0) } ?? []
+        let curIdx: Int? = {
+            guard player.currentTrack != nil, !plTracks.isEmpty else { return nil }
+            if player.currentIndex >= 0 && player.currentIndex < plTracks.count && plTracks[player.currentIndex].id == player.currentTrack?.id {
+                return player.currentIndex
+            }
+            return plTracks.firstIndex(where: { $0.id == player.currentTrack?.id })
+        }()
+        let plannedByIndex = plannedPlayTimesForPartymode(now: now)
+
+        var entries: [PartyQueueEntry] = []
+        entries.reserveCapacity(plTracks.count)
+        var upNextCount = 0
+
+        for (idx, t) in plTracks.enumerated() {
+            let isCurrent = (curIdx == idx)
+            let isPlayed = curIdx.map { idx < $0 } ?? false
+            let isUpNext = !isPlayed
+            if !isCurrent && !isPlayed {
+                upNextCount += 1
+            }
+            let req = partyRequesterByTrackID[t.id]
+            let intro = partyVoiceIntrosByTrackID[t.id]
+            let item = PartyTrackItem(
+                from: t,
+                resolvedAlbumTitle: allTrackAlbumByID[t.id]?.title ?? t.effectiveAlbum,
+                inPlaylist: true,
+                inUpNext: isUpNext
+            )
+            entries.append(PartyQueueEntry(
+                position: idx,
+                track: item,
+                isCurrent: isCurrent,
+                isPlayed: isPlayed,
+                addedBy: req?.guestName,
+                addedByGuestID: req?.guestID,
+                addedAt: req?.addedAt,
+                plannedPlayAt: isCurrent ? nil : plannedByIndex[idx],
+                hasVoiceIntro: intro != nil,
+                voiceIntroDuration: intro?.duration
+            ))
+        }
+
+        let hostName = Host.current().localizedName ?? "My Echo"
+        return PartyPlaylistState(
+            playlistName: pl?.name ?? Self.partyPlaylistName,
+            serverName: hostName,
+            isPlaying: player.isPlaying,
+            isPlayingVoiceIntro: player.isPlayingVoiceIntro,
+            currentTrackID: player.currentTrack?.id,
+            currentIndex: curIdx,
+            currentTime: player.currentTime,
+            duration: player.duration,
+            libraryTotalCount: tracks.filter(\.isAvailable).count,
+            upNextCount: upNextCount,
+            allowReRequestPlayed: partyAllowReRequestPlayed,
+            chatEnabled: partyChatEnabled,
+            streamingEnabled: partyStreamingEnabled,
+            maxIntroSeconds: partyMaxIntroSeconds,
+            stateUpdatedAt: now,
+            revision: partyStateRevision,
+            tracks: entries,
+            guests: partyModeServer.snapshotGuests(now: now),
+            chatMessages: partyChatMessages
+        )
     }
 
     // MARK: - Devices Management
@@ -2400,9 +3567,11 @@ final class EchoStore {
         }
         let serverName = Host.current().localizedName ?? "My Echo Mac"
         let snapshotTracks = tracks
-        let snapshotPlaylists = playlists
+        let snapshotPlaylists = syncablePlaylists
         let snapshotPodcasts = podcasts
         let albumMap = allTrackAlbumByID
+        let albumEditorial = albumEditorialByKey
+        let artistEditorial = artistEditorialByKey
         Task.detached(priority: .userInitiated) { [weak self] in
             let snapshots = wirelessDevices.map { dev in
                 WirelessDeviceSnapshot(
@@ -2411,7 +3580,9 @@ final class EchoStore {
                     playlists: snapshotPlaylists,
                     podcasts: snapshotPodcasts,
                     serverName: serverName,
-                    precomputedAlbumByTrackID: albumMap
+                    precomputedAlbumByTrackID: albumMap,
+                    albumEditorialByKey: albumEditorial,
+                    artistEditorialByKey: artistEditorial
                 )
             }
             var versions: [UUID: String] = [:]
@@ -2486,7 +3657,8 @@ final class EchoStore {
     }
 
     func isPlaylistSelected(_ playlist: Playlist, on device: DeviceProfile? = nil) -> Bool {
-        (device ?? activeDevice)?.selectedPlaylistIDs.contains(playlist.id) ?? false
+        if isPartyPlaylist(playlist) { return false }
+        return (device ?? activeDevice)?.selectedPlaylistIDs.contains(playlist.id) ?? false
     }
 
     func trackSyncReason(_ track: Track, on device: DeviceProfile? = nil) -> String? {
@@ -2500,7 +3672,7 @@ final class EchoStore {
            dev.selectedArtistKeys.contains(albumArtistKey) {
             return "Artist"
         }
-        for pl in playlists where dev.selectedPlaylistIDs.contains(pl.id) {
+        for pl in syncablePlaylists where dev.selectedPlaylistIDs.contains(pl.id) {
             if pl.trackIDs.contains(track.id) { return "Playlist" }
         }
         return nil
@@ -2583,6 +3755,12 @@ final class EchoStore {
     }
 
     func togglePlaylistSync(_ playlist: Playlist, onDeviceID targetDeviceID: UUID? = nil) {
+        if isPartyPlaylist(playlist) {
+            mutateDevice(id: targetDeviceID) { d in
+                d.selectedPlaylistIDs.remove(playlist.id)
+            }
+            return
+        }
         mutateDevice(id: targetDeviceID) { d in
             if d.selectedPlaylistIDs.contains(playlist.id) {
                 d.selectedPlaylistIDs.remove(playlist.id)
@@ -2595,11 +3773,12 @@ final class EchoStore {
     private func rebuildSelectedTrackIDCache() {
         var map: [UUID: Set<String>] = [:]
         map.reserveCapacity(devices.count)
+        let allowedPlaylists = syncablePlaylists
         for dev in devices {
             map[dev.id] = SyncPlanner.resolveSelectedTrackIDs(
                 profile: dev,
                 allTracks: tracks,
-                playlists: playlists,
+                playlists: allowedPlaylists,
                 precomputedAlbumByTrackID: allTrackAlbumByID
             )
         }
@@ -2625,7 +3804,7 @@ final class EchoStore {
         guard let dev = devices.first(where: { $0.id == deviceID }) else { return }
         if syncPlansByDeviceID[deviceID] != nil { return }
         let snapshotTracks = tracks
-        let snapshotPlaylists = playlists
+        let snapshotPlaylists = syncablePlaylists
         let snapshotPodcasts = podcasts
         let albumMap = allTrackAlbumByID
         Task.detached(priority: .userInitiated) { [weak self] in
@@ -2664,12 +3843,18 @@ final class EchoStore {
            !targetDevices.contains(where: { $0.id == viewed.id }) {
             targetDevices.append(viewed)
         }
+        // Also compute pending-bytes plans for all connected physical storage devices shown in the sidebar
+        for dev in devices where !dev.isVirtualWireless && dev.isConnected {
+            if !targetDevices.contains(where: { $0.id == dev.id }) {
+                targetDevices.append(dev)
+            }
+        }
         guard !targetDevices.isEmpty else { return }
 
         // 2. Compute I/O-heavy SyncPlan (NAS/USB fileExists + manifest read) off the main thread!
         syncPlanTask?.cancel()
         let snapshotTracks = tracks
-        let snapshotPlaylists = playlists
+        let snapshotPlaylists = syncablePlaylists
         let snapshotPodcasts = podcasts
         let albumMap = allTrackAlbumByID
         let activeID = activeDevice?.id
@@ -2920,6 +4105,56 @@ final class EchoStore {
         }
         database.saveTrackStatsBatch(updated)
         showToast("Reset all personal play counters")
+    }
+
+    // MARK: - 1–5 Star Track & Album Ratings
+
+    func userRating(for track: Track) -> Int {
+        trackStats[track.id]?.userRating ?? 0
+    }
+
+    func setUserRating(_ rating: Int?, for track: Track) {
+        let clamped: Int? = rating.flatMap { $0 >= 1 ? min(5, $0) : nil }
+        var current = trackStats[track.id] ?? TrackStats(trackID: track.id)
+        if current.userRating == clamped { return }
+        current.userRating = clamped
+        trackStats[track.id] = current
+        database.saveTrackStats(current)
+    }
+
+    func explicitAlbumRating(for album: AlbumGroup) -> Int? {
+        albumRatings[album.id]?.rating
+    }
+
+    func averageTrackRating(for album: AlbumGroup) -> Double? {
+        let rated = album.tracks.compactMap { trackStats[$0.id]?.userRating }.filter { $0 > 0 }
+        guard !rated.isEmpty else { return nil }
+        return Double(rated.reduce(0, +)) / Double(rated.count)
+    }
+
+    /// Explicit 1–5 album rating if set, otherwise the average rating of rated tracks on the album (0 if unrated).
+    func effectiveAlbumRating(for album: AlbumGroup) -> Double {
+        if let explicit = albumRatings[album.id]?.rating {
+            return Double(explicit)
+        }
+        return averageTrackRating(for: album) ?? 0
+    }
+
+    func setAlbumRating(_ rating: Int?, for album: AlbumGroup) {
+        let clamped: Int? = rating.flatMap { $0 >= 1 ? min(5, $0) : nil }
+        if let clamped {
+            let entry = AlbumUserRating(albumKey: album.id, rating: clamped, updatedAt: Date())
+            albumRatings[album.id] = entry
+            database.saveAlbumRating(entry)
+        } else {
+            albumRatings.removeValue(forKey: album.id)
+            database.deleteAlbumRating(albumKey: album.id)
+        }
+    }
+
+    func clearGlobalSearch() {
+        searchQuery = ""
+        minStarRating = 0
     }
 
     func ensurePopularityLoaded(forAlbum album: AlbumGroup, force: Bool = false) {
@@ -3736,7 +4971,11 @@ final class EchoStore {
     // MARK: - Search Filtering & Sorting (Scoped to Selected Library!)
 
     var isGlobalSearchActive: Bool {
-        !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasText = !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if isLidarrLibraryScope || isViewingPodcasts {
+            return hasText
+        }
+        return hasText || minStarRating > 0
     }
 
     var isViewingPodcasts: Bool {
@@ -3747,16 +4986,31 @@ final class EchoStore {
     }
 
     var filteredArtists: [ArtistGroup] {
-        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return artists }
-        return artists.filter {
-            $0.name.lowercased().contains(q) || $0.albums.contains { $0.title.lowercased().contains(q) }
+        let terms = SearchQueryTerms.parse(searchQuery)
+        let minStars = minStarRating
+        guard !terms.isEmpty || minStars > 0 else { return artists }
+        return artists.filter { artist in
+            let maxAlbumRating = artist.albums.map { effectiveAlbumRating(for: $0) }.max() ?? 0
+            let maxTrackRating = Double(artist.tracks.map { userRating(for: $0) }.max() ?? 0)
+            let bestRating = max(maxAlbumRating, maxTrackRating)
+            if minStars > 0 && bestRating < Double(minStars) {
+                return false
+            }
+            if terms.isEmpty { return true }
+            let values = SearchFieldValues(
+                track: artist.tracks.map(\.title).joined(separator: " ").lowercased(),
+                artist: artist.name.lowercased(),
+                album: artist.albums.map(\.title).joined(separator: " ").lowercased(),
+                rating: bestRating > 0 ? bestRating : nil
+            )
+            return terms.matches(values: values)
         }
     }
 
     var filteredAlbums: [AlbumGroup] {
-        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if q.isEmpty {
+        let terms = SearchQueryTerms.parse(searchQuery)
+        let minStars = minStarRating
+        if terms.isEmpty && minStars == 0 {
             switch albumSortOrder {
             case .title:
                 return albums
@@ -3764,6 +5018,13 @@ final class EchoStore {
                 return newArrivalAlbums
             case .newReleases:
                 return newReleaseAlbums
+            case .highestRated:
+                return albums.sorted { a, b in
+                    let ra = effectiveAlbumRating(for: a)
+                    let rb = effectiveAlbumRating(for: b)
+                    if abs(ra - rb) > 0.001 { return ra > rb }
+                    return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
+                }
             case .mostPlayed:
                 return albums.sorted { a, b in
                     let pa = totalUserPlays(for: a)
@@ -3780,8 +5041,20 @@ final class EchoStore {
                 }
             }
         }
-        let base = albums.filter {
-            $0.title.lowercased().contains(q) || $0.artist.lowercased().contains(q)
+        let base = albums.filter { album in
+            let effRating = effectiveAlbumRating(for: album)
+            if minStars > 0 && effRating < Double(minStars) {
+                return false
+            }
+            if terms.isEmpty { return true }
+            let values = SearchFieldValues(
+                track: album.tracks.map(\.title).joined(separator: " ").lowercased(),
+                artist: album.artist.lowercased(),
+                album: album.title.lowercased(),
+                year: album.year.map(String.init) ?? "",
+                rating: effRating > 0 ? effRating : nil
+            )
+            return terms.matches(values: values)
         }
         switch albumSortOrder {
         case .title:
@@ -3802,6 +5075,13 @@ final class EchoStore {
                 let da = a.latestArrivalDate
                 let db = b.latestArrivalDate
                 if abs(da.timeIntervalSince(db)) > 1.0 { return da > db }
+                return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
+            }
+        case .highestRated:
+            return base.sorted { a, b in
+                let ra = effectiveAlbumRating(for: a)
+                let rb = effectiveAlbumRating(for: b)
+                if abs(ra - rb) > 0.001 { return ra > rb }
                 return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
             }
         case .mostPlayed:
@@ -3856,6 +5136,11 @@ final class EchoStore {
                 } else {
                     asc = pa < pb
                 }
+            case .rating:
+                let ra = trackStats[a.id]?.userRating ?? 0
+                let rb = trackStats[b.id]?.userRating ?? 0
+                if ra == rb { return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending }
+                asc = ra < rb
             case .format:
                 let qa = qualitySortScore(a)
                 let qb = qualitySortScore(b)
@@ -3894,6 +5179,8 @@ final class EchoStore {
             switch trackSortOrder {
             case .library, .newArrivals, .recentlyPlayed, .artist:
                 return TrackTableSortState(column: .index, ascending: trackSortAscending)
+            case .highestRated:
+                return TrackTableSortState(column: .rating, ascending: trackSortAscending)
             case .mostPlayed:
                 return TrackTableSortState(column: .plays, ascending: trackSortAscending)
             case .onlinePopularity:
@@ -3908,6 +5195,7 @@ final class EchoStore {
             switch newValue.column {
             case .index: trackSortOrder = .library
             case .title: trackSortOrder = .title
+            case .rating: trackSortOrder = .highestRated
             case .plays: trackSortOrder = .mostPlayed
             case .popularity: trackSortOrder = .onlinePopularity
             case .album, .format, .sync, .duration: break
@@ -3916,12 +5204,20 @@ final class EchoStore {
     }
 
     var filteredTracks: [Track] {
-        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let base = q.isEmpty ? scopedTracks : scopedTracks.filter {
-            $0.title.lowercased().contains(q)
-                || $0.artist.lowercased().contains(q)
-                || $0.album.lowercased().contains(q)
-                || $0.format.displayBadge.lowercased().contains(q)
+        let terms = SearchQueryTerms.parse(searchQuery)
+        let minStars = minStarRating
+        let base: [Track]
+        if terms.isEmpty && minStars == 0 {
+            base = scopedTracks
+        } else {
+            base = scopedTracks.filter { t in
+                let r = userRating(for: t)
+                if minStars > 0 && r < minStars {
+                    return false
+                }
+                if terms.isEmpty { return true }
+                return terms.matches(track: t, rating: r > 0 ? r : nil)
+            }
         }
         if let col = trackTableColumn {
             return sortTracks(base, by: TrackTableSortState(column: col, ascending: trackSortAscending))
@@ -3936,6 +5232,8 @@ final class EchoStore {
                 if abs(da.timeIntervalSince(db)) > 1.0 { return da > db }
                 return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
             }
+        case .highestRated:
+            return sortTracks(base, by: TrackTableSortState(column: .rating, ascending: false))
         case .mostPlayed:
             return sortTracks(base, by: TrackTableSortState(column: .plays, ascending: false))
         case .onlinePopularity:
@@ -3959,34 +5257,46 @@ final class EchoStore {
     }
 
     var filteredPlaylists: [Playlist] {
-        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return playlists }
+        let terms = SearchQueryTerms.parse(searchQuery)
+        let minStars = minStarRating
+        guard !terms.isEmpty || minStars > 0 else { return playlists }
         return playlists.filter { pl in
-            if pl.name.lowercased().contains(q) || pl.description.lowercased().contains(q) {
+            let tracksInPl = pl.trackIDs.compactMap { tracksByID[$0] }.filter {
+                selectedSourceID == nil || $0.sourceID == selectedSourceID
+            }
+            if minStars > 0 {
+                let hasQualifiedTrack = tracksInPl.contains { t in
+                    let r = userRating(for: t)
+                    guard r >= minStars else { return false }
+                    return terms.isEmpty || terms.matches(track: t, rating: r)
+                }
+                return hasQualifiedTrack
+            }
+            if terms.matches(fields: [pl.name, pl.description]) {
                 return true
             }
-            return pl.trackIDs.compactMap { tracksByID[$0] }.contains { t in
-                (selectedSourceID == nil || t.sourceID == selectedSourceID)
-                    && (t.title.lowercased().contains(q) || t.artist.lowercased().contains(q))
+            return tracksInPl.contains { t in
+                let r = userRating(for: t)
+                return terms.matches(track: t, rating: r > 0 ? r : nil)
             }
         }
     }
 
     var filteredPodcastShows: [PodcastShow] {
-        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return podcasts }
+        let terms = SearchQueryTerms.parse(searchQuery)
+        guard !terms.isEmpty else { return podcasts }
         return podcasts.filter {
-            $0.title.lowercased().contains(q) || $0.author.lowercased().contains(q) || $0.description.lowercased().contains(q)
+            terms.matches(fields: [$0.title, $0.author, $0.description])
         }
     }
 
     var filteredPodcastEpisodes: [PodcastEpisode] {
-        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return [] }
+        let terms = SearchQueryTerms.parse(searchQuery)
+        guard !terms.isEmpty else { return [] }
         var out: [PodcastEpisode] = []
         for show in podcasts {
             for ep in show.episodes {
-                if ep.title.lowercased().contains(q) || ep.showTitle.lowercased().contains(q) || ep.summary.lowercased().contains(q) {
+                if terms.matches(fields: [ep.title, ep.showTitle, ep.summary]) {
                     out.append(ep)
                 }
             }

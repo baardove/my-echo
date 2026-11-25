@@ -6,6 +6,7 @@ struct PlayerBarView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var showQueuePopover = false
     @State private var showCrossfadePopover = false
+    @State private var showOutputPopover = false
     @State private var isScrubbing = false
     @State private var scrubValue: Double = 0
     @State private var isQueueDropTargeted = false
@@ -76,6 +77,18 @@ struct PlayerBarView: View {
                                 Text("·")
                                     .foregroundStyle(EchoTheme.textMuted)
                                 OnlinePopularityMeter(stats: curStats, compact: true)
+                            }
+
+                            Text("·")
+                                .foregroundStyle(EchoTheme.textMuted)
+                            StarRatingControl(
+                                rating: curStats.userRating ?? 0,
+                                starSize: 9.5,
+                                spacing: 1.5,
+                                showEmptyWhenUnrated: true,
+                                labelPrefix: "Track Rating"
+                            ) { newRating in
+                                store.setUserRating(newRating, for: track)
                             }
 
                             if let err = player.playbackError {
@@ -241,8 +254,36 @@ struct PlayerBarView: View {
 
             Spacer(minLength: 10)
 
-            // Right: Harmonized Crossfade, Mini Player, Queue & Volume Controls
+            // Right: Harmonized Party Lock, Crossfade, Mini Player, Queue & Volume Controls
             HStack(spacing: 8) {
+                if store.isPartyModeEnabled {
+                    Button {
+                        store.searchQuery = ""
+                        store.isLidarrLibraryScope = false
+                        store.navigate(to: .partyMode)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "lock.fill")
+                                .font(.system(size: 9.5, weight: .bold))
+                            Text("PARTY")
+                                .font(.system(size: 9.5, weight: .black, design: .monospaced))
+                                .lineLimit(1)
+                        }
+                        .fixedSize()
+                        .padding(.horizontal, 8)
+                        .frame(height: 26)
+                        .background(EchoTheme.neoMagenta.opacity(0.20))
+                        .foregroundStyle(EchoTheme.neoMagenta)
+                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: EchoTheme.radiusSmall)
+                                .strokeBorder(EchoTheme.neoMagenta.opacity(0.65), lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help("Playback is locked to dynamic playlist 'Partymode'. Click to open Party Mode control center.")
+                }
+
                 Button {
                     showCrossfadePopover.toggle()
                 } label: {
@@ -285,7 +326,7 @@ struct PlayerBarView: View {
                       : "Enable smooth equal-power Crossfade between tracks during Mac playback.")
 
                 Button {
-                    openWindow(id: "mini-player")
+                    toggleMiniPlayerWindow()
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "rectangle.compress.vertical")
@@ -297,13 +338,18 @@ struct PlayerBarView: View {
                     .fixedSize()
                     .padding(.horizontal, 8)
                     .frame(height: 26)
-                    .background(EchoTheme.surfaceElevated)
-                    .foregroundStyle(EchoTheme.neoMint)
+                    .background(store.isMiniPlayerOpen ? EchoTheme.neoMint.opacity(0.20) : EchoTheme.surfaceElevated)
+                    .foregroundStyle(store.isMiniPlayerOpen ? EchoTheme.neoMint : EchoTheme.textSecondary)
                     .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
-                    .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(EchoTheme.neoMint.opacity(0.45), lineWidth: 1))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: EchoTheme.radiusSmall)
+                            .strokeBorder(store.isMiniPlayerOpen ? EchoTheme.neoMint.opacity(0.75) : EchoTheme.neoMint.opacity(0.42), lineWidth: 1)
+                    )
                 }
                 .buttonStyle(.plain)
-                .help("Open the compact floating Winamp-style Mini Player deck with live spectrum analyzer, Windowshade mode, and PL drawer (⌘⇧M).")
+                .help(store.isMiniPlayerOpen
+                      ? "Hide the floating Winamp-style Mini Player (⌘⇧M)."
+                      : "Show the compact floating Winamp-style Mini Player deck with live spectrum analyzer, Windowshade mode, and PL drawer (⌘⇧M).")
 
                 Button {
                     showQueuePopover.toggle()
@@ -330,6 +376,43 @@ struct PlayerBarView: View {
                     queuePopoverView
                 }
                 .help("Open the Up Next playback queue to jump to or remove queued tracks.")
+
+                // CoreAudio Output Device Destination Picker (USB DAC / Headphones / Speakers / AirPlay)
+                let dedicated = player.isUsingDedicatedOutputDevice
+                let outputIcon = player.activeOutputDevice?.transportKind.iconName ?? "hifispeaker.fill"
+                Button {
+                    player.refreshOutputDevices()
+                    showOutputPopover.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: outputIcon)
+                            .font(.system(size: 10.5, weight: .bold))
+                        if dedicated {
+                            Circle()
+                                .fill(EchoTheme.neoMint)
+                                .frame(width: 4.5, height: 4.5)
+                        }
+                    }
+                    .fixedSize()
+                    .padding(.horizontal, 8)
+                    .frame(height: 26)
+                    .background((showOutputPopover || dedicated) ? EchoTheme.neoMint.opacity(0.18) : EchoTheme.surfaceElevated)
+                    .foregroundStyle((showOutputPopover || dedicated) ? EchoTheme.neoMint : EchoTheme.textSecondary)
+                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: EchoTheme.radiusSmall)
+                            .strokeBorder((showOutputPopover || dedicated) ? EchoTheme.neoMint.opacity(0.60) : EchoTheme.border, lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showOutputPopover, arrowEdge: .top) {
+                    outputDevicePopoverView
+                }
+                .help(
+                    dedicated
+                        ? "Audio output: \(player.activeOutputDevice?.name ?? "Custom Device") (dedicated). Click to switch speaker, headphones, or USB DAC."
+                        : "Audio output: System Default (\(player.activeOutputDevice?.name ?? "Mac")). Click to route My Echo to a specific speaker, headphones, or USB DAC."
+                )
 
                 Button {
                     player.isMuted.toggle()
@@ -379,6 +462,25 @@ struct PlayerBarView: View {
         if player.volume < 0.4 { return "speaker.wave.1.fill" }
         if player.volume < 0.75 { return "speaker.wave.2.fill" }
         return "speaker.wave.3.fill"
+    }
+
+    private func toggleMiniPlayerWindow() {
+        if let miniWin = NSApp.windows.first(where: { $0.title == "My Echo Mini" }) {
+            if miniWin.isVisible && !miniWin.isMiniaturized {
+                miniWin.orderOut(nil)
+                store.isMiniPlayerOpen = false
+            } else {
+                if miniWin.isMiniaturized {
+                    miniWin.deminiaturize(nil)
+                }
+                miniWin.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+                store.isMiniPlayerOpen = true
+            }
+        } else {
+            openWindow(id: "mini-player")
+            store.isMiniPlayerOpen = true
+        }
     }
 
     private var queuePopoverView: some View {
@@ -541,6 +643,146 @@ struct PlayerBarView: View {
         }
         .padding(14)
         .frame(width: 280)
+        .background(EchoTheme.surface)
+    }
+
+    private var outputDevicePopoverView: some View {
+        let player = store.player
+        let systemDefault = player.availableOutputDevices.first(where: \.isSystemDefault)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                HStack(spacing: 6) {
+                    Image(systemName: "hifispeaker.2.fill")
+                        .font(.system(size: 12.5, weight: .bold))
+                        .foregroundStyle(EchoTheme.neoMint)
+                    Text("Audio Output")
+                        .font(.system(size: 13.5, weight: .bold))
+                        .foregroundStyle(EchoTheme.textPrimary)
+                }
+                Spacer()
+                Button {
+                    player.refreshOutputDevices()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(EchoTheme.neoMint)
+                        .frame(width: 24, height: 24)
+                        .background(EchoTheme.surfaceElevated)
+                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                        .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(EchoTheme.neoMint.opacity(0.4), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .help("Rescan connected audio output devices.")
+            }
+
+            Divider().overlay(EchoTheme.border)
+
+            // System Default option
+            let isDefaultSelected = player.selectedOutputDeviceUID == nil
+            Button {
+                player.selectOutputDevice(uid: nil)
+                showOutputPopover = false
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: "gearshape.2.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(isDefaultSelected ? EchoTheme.neoMint : EchoTheme.textSecondary)
+                        .frame(width: 20)
+                    VStack(alignment: .leading, spacing: 1.5) {
+                        Text("System Default")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(isDefaultSelected ? EchoTheme.neoMint : EchoTheme.textPrimary)
+                        if let systemDefault {
+                            Text("Follows macOS · \(systemDefault.name)")
+                                .font(.system(size: 10))
+                                .foregroundStyle(EchoTheme.textMuted)
+                                .lineLimit(1)
+                        }
+                    }
+                    Spacer()
+                    if isDefaultSelected {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(EchoTheme.neoMint)
+                    }
+                }
+                .padding(.horizontal, 9)
+                .padding(.vertical, 7)
+                .background(isDefaultSelected ? EchoTheme.neoMint.opacity(0.14) : EchoTheme.surfaceElevated.opacity(0.55))
+                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                .overlay(
+                    RoundedRectangle(cornerRadius: EchoTheme.radiusControl)
+                        .strokeBorder(isDefaultSelected ? EchoTheme.neoMint.opacity(0.55) : EchoTheme.border, lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+
+            if !player.availableOutputDevices.isEmpty {
+                ScrollView {
+                    VStack(spacing: 5) {
+                        ForEach(player.availableOutputDevices) { dev in
+                            let isSelected = player.selectedOutputDeviceUID == dev.id
+                            Button {
+                                player.selectOutputDevice(uid: dev.id)
+                                showOutputPopover = false
+                            } label: {
+                                HStack(spacing: 9) {
+                                    Image(systemName: dev.transportKind.iconName)
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundStyle(isSelected ? EchoTheme.neoMint : EchoTheme.textSecondary)
+                                        .frame(width: 20)
+                                    VStack(alignment: .leading, spacing: 1.5) {
+                                        Text(dev.name)
+                                            .font(.system(size: 12, weight: isSelected ? .bold : .semibold))
+                                            .foregroundStyle(isSelected ? EchoTheme.neoMint : EchoTheme.textPrimary)
+                                            .lineLimit(1)
+                                        HStack(spacing: 5) {
+                                            Text(dev.transportKind.label)
+                                                .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                                                .foregroundStyle(EchoTheme.textMuted)
+                                            if let rate = dev.formattedSampleRate {
+                                                Text("· \(rate)")
+                                                    .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                                                    .foregroundStyle(EchoTheme.neoCyan.opacity(0.85))
+                                            }
+                                            if dev.isSystemDefault {
+                                                Text("· MAC DEFAULT")
+                                                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                                    .foregroundStyle(EchoTheme.textMuted.opacity(0.8))
+                                            }
+                                        }
+                                    }
+                                    Spacer(minLength: 6)
+                                    if isSelected {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 11, weight: .bold))
+                                            .foregroundStyle(EchoTheme.neoMint)
+                                    }
+                                }
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 7)
+                                .background(isSelected ? EchoTheme.neoMint.opacity(0.14) : EchoTheme.surfaceElevated.opacity(0.45))
+                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: EchoTheme.radiusControl)
+                                        .strokeBorder(isSelected ? EchoTheme.neoMint.opacity(0.55) : EchoTheme.border.opacity(0.75), lineWidth: 1)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .frame(maxHeight: 240)
+            }
+
+            Text("Routes My Echo audio directly via CoreAudio without changing macOS system output.")
+                .font(.system(size: 10))
+                .foregroundStyle(EchoTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .frame(width: 300)
         .background(EchoTheme.surface)
     }
 }

@@ -64,8 +64,26 @@ struct EchoApp: App {
 
                 Divider()
 
-                Button("Open Winamp Mini Player") {
-                    openWindow(id: "mini-player")
+                Button(store.isPartyModeEnabled ? "Exit Party Mode" : "Start Party Mode (Partymode)") {
+                    store.togglePartyMode()
+                }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+
+                Button(store.isMiniPlayerOpen ? "Hide Winamp Mini Player" : "Show Winamp Mini Player") {
+                    if let miniWin = NSApp.windows.first(where: { $0.title == "My Echo Mini" }) {
+                        if miniWin.isVisible && !miniWin.isMiniaturized {
+                            miniWin.orderOut(nil)
+                            store.isMiniPlayerOpen = false
+                        } else {
+                            if miniWin.isMiniaturized { miniWin.deminiaturize(nil) }
+                            miniWin.makeKeyAndOrderFront(nil)
+                            NSApp.activate(ignoringOtherApps: true)
+                            store.isMiniPlayerOpen = true
+                        }
+                    } else {
+                        openWindow(id: "mini-player")
+                        store.isMiniPlayerOpen = true
+                    }
                 }
                 .keyboardShortcut("m", modifiers: [.command, .shift])
             }

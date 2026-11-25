@@ -918,7 +918,8 @@ struct DeviceSyncView: View {
                 }
 
             case .playlists:
-                if store.playlists.isEmpty {
+                let syncablePlaylists = store.syncablePlaylists
+                if syncablePlaylists.isEmpty {
                     emptyDiffState(
                         icon: "music.note.list",
                         color: EchoTheme.neoCyan,
@@ -927,7 +928,7 @@ struct DeviceSyncView: View {
                     )
                 } else {
                     VStack(alignment: .leading, spacing: 10) {
-                        ForEach(store.playlists) { playlist in
+                        ForEach(syncablePlaylists) { playlist in
                             let isIncluded = device.selectedPlaylistIDs.contains(playlist.id)
                             let planned = plan.playlistsToWrite.first(where: { $0.playlist.id == playlist.id })
                             let relPath = PathFormatter.relativePlaylistPath(for: playlist, profile: device)

@@ -42,6 +42,7 @@ struct SidebarView: View {
                         sidebarRow(icon: "person.2.fill", title: "Artists", count: store.artists.count, destination: .artists, tip: "Browse artists in '\(store.selectedLibraryDisplayName)'. Drag or toggle entire artists to sync.")
                         sidebarRow(icon: "square.stack.fill", title: "Albums", count: store.albums.count, destination: .albums, tip: "Browse albums in '\(store.selectedLibraryDisplayName)' with cover art and path previews.")
                         sidebarRow(icon: "music.note", title: "Tracks", count: store.scopedTracks.count, destination: .tracks, tip: "View every track inside '\(store.selectedLibraryDisplayName)'.")
+                        sidebarPartyModeRow
                         sidebarRow(icon: "mic.fill", title: "Podcasts", count: store.podcasts.count, destination: .podcasts, tip: "Search podcast directories, subscribe via RSS, download episodes, and sync to single or multiple players.")
                         if store.lidarrConfig.isEnabled {
                             sidebarRow(
@@ -427,10 +428,55 @@ struct SidebarView: View {
         .help(tip)
     }
 
+    private var sidebarPartyModeRow: some View {
+        let isActive = store.currentDestination == .partyMode
+        let isLive = store.isPartyModeEnabled
+        return Button {
+            store.clearGlobalSearch()
+            store.isLidarrLibraryScope = false
+            store.navigate(to: .partyMode)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: isLive ? "dot.radiowaves.left.and.right" : "music.quarternote.3")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(isLive ? EchoTheme.neoMagenta : (isActive ? EchoTheme.neoMint : EchoTheme.textSecondary))
+                    .frame(width: 20)
+                Text("Party Mode")
+                    .font(.system(size: 13, weight: (isActive || isLive) ? .bold : .medium))
+                    .foregroundStyle(isLive ? EchoTheme.textPrimary : (isActive ? EchoTheme.textPrimary : EchoTheme.textSecondary))
+                Spacer()
+                if isLive {
+                    Text(store.partyServerPort > 0 ? ":\(String(store.partyServerPort))" : "LIVE")
+                        .font(.system(size: 8.5, weight: .black, design: .monospaced))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(EchoTheme.neoMagenta.opacity(0.22))
+                        .foregroundStyle(EchoTheme.neoMagenta)
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7.5)
+            .background(
+                RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                    .fill(isActive ? EchoTheme.surfaceElevated : (isLive ? EchoTheme.neoMagenta.opacity(0.08) : Color.clear))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                    .strokeBorder(isLive ? EchoTheme.neoMagenta.opacity(0.55) : (isActive ? EchoTheme.neoMint.opacity(0.4) : Color.clear), lineWidth: 1)
+            )
+            .padding(.horizontal, 8)
+        }
+        .buttonStyle(.plain)
+        .help(isLive
+              ? "Party Mode is LIVE — locked to 'Partymode' with guest web server on port \(store.partyServerPort). Click to view QR code and live queue."
+              : "Lock playback onto the dynamic 'Partymode' playlist and launch a local web server on a random port so guests can search and queue tracks.")
+    }
+
     private func sidebarRow(icon: String, title: String, count: Int? = nil, destination: NavDestination, tip: String) -> some View {
         let isActive = isDestinationHighlighted(destination)
         return Button {
-            store.searchQuery = ""
+            store.clearGlobalSearch()
             if destination == .lidarr {
                 store.isLidarrLibraryScope = true
             } else if destination == .home || destination == .artists || destination == .albums || destination == .tracks {
@@ -479,7 +525,8 @@ private struct SidebarPlaylistDropRow: View {
     var body: some View {
         let isActive = store.currentDestination == .playlist(playlist.id)
         let isFocused = store.focusedPlaylist?.id == playlist.id
-        let isSynced = store.isPlaylistSelected(playlist)
+        let isParty = store.isPartyPlaylist(playlist)
+        let isSynced = !isParty && store.isPlaylistSelected(playlist)
         let firstArt = store.tracks(for: playlist).first?.artworkHash
 
         HStack(spacing: 8) {
@@ -499,7 +546,12 @@ private struct SidebarPlaylistDropRow: View {
                                 .foregroundStyle(isDropTargeted ? EchoTheme.neoMint : (isActive ? EchoTheme.textPrimary : EchoTheme.textSecondary))
                                 .lineLimit(1)
 
-                            if isFocused {
+                            if store.isPartyLockedPlaylist(playlist) {
+                                Image(systemName: "lock.fill")
+                                    .font(.system(size: 8.5))
+                                    .foregroundStyle(EchoTheme.neoMagenta)
+                                    .help("Locked by Party Mode — guests can add tracks live.")
+                            } else if isFocused {
                                 Image(systemName: "pin.fill")
                                     .font(.system(size: 8.5))
                                     .foregroundStyle(EchoTheme.neoCyan)
@@ -518,31 +570,33 @@ private struct SidebarPlaylistDropRow: View {
             .buttonStyle(.plain)
             .help("Open playlist '\(playlist.name)' and focus it for quick-add (+) buttons. Drag songs or albums here to copy them in.")
 
-            // Explicit Sync Status Toggle Pill
-            Button {
-                store.togglePlaylistSync(playlist)
-            } label: {
-                HStack(spacing: 3) {
-                    Image(systemName: isSynced ? "checkmark.square.fill" : "square")
-                        .font(.system(size: 11, weight: .semibold))
-                    if isSynced {
-                        Text("SYNC")
-                            .font(.system(size: 8, weight: .black, design: .monospaced))
+            // Explicit Sync Status Toggle Pill (omitted for Partymode playlist)
+            if !isParty {
+                Button {
+                    store.togglePlaylistSync(playlist)
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: isSynced ? "checkmark.square.fill" : "square")
+                            .font(.system(size: 11, weight: .semibold))
+                        if isSynced {
+                            Text("SYNC")
+                                .font(.system(size: 8, weight: .black, design: .monospaced))
+                        }
                     }
+                    .padding(.horizontal, isSynced ? 5.5 : 4)
+                    .padding(.vertical, 3)
+                    .background(isSynced ? EchoTheme.neoMint.opacity(0.20) : Color.clear)
+                    .foregroundStyle(isSynced ? EchoTheme.neoMint : EchoTheme.textMuted.opacity(isHovered ? 0.9 : 0.55))
+                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(isSynced ? EchoTheme.neoMint.opacity(0.5) : Color.clear, lineWidth: 1)
+                    )
                 }
-                .padding(.horizontal, isSynced ? 5.5 : 4)
-                .padding(.vertical, 3)
-                .background(isSynced ? EchoTheme.neoMint.opacity(0.20) : Color.clear)
-                .foregroundStyle(isSynced ? EchoTheme.neoMint : EchoTheme.textMuted.opacity(isHovered ? 0.9 : 0.55))
-                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
-                .overlay(
-                    RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(isSynced ? EchoTheme.neoMint.opacity(0.5) : Color.clear, lineWidth: 1)
-                )
+                .buttonStyle(.plain)
+                .help(isSynced
+                      ? "'\(playlist.name)' is included in sync for the selected destination. Click to exclude."
+                      : "Click to include '\(playlist.name)' (and its M3U file + tracks) in the selected destination's sync.")
             }
-            .buttonStyle(.plain)
-            .help(isSynced
-                  ? "'\(playlist.name)' is included in sync for the selected destination. Click to exclude."
-                  : "Click to include '\(playlist.name)' (and its M3U file + tracks) in the selected destination's sync.")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -564,7 +618,7 @@ private struct SidebarPlaylistDropRow: View {
                 store.setFocusedPlaylist(playlist.id)
                 store.showToast("Set '\(playlist.name)' as quick-add (+) target")
             }
-            if !store.devices.isEmpty {
+            if !isParty && !store.devices.isEmpty {
                 Menu("Sync to Destinations") {
                     ForEach(store.devices) { dev in
                         let onDev = store.isPlaylistSelected(playlist, on: dev)
@@ -577,6 +631,18 @@ private struct SidebarPlaylistDropRow: View {
                             }
                         }
                     }
+                }
+            }
+            Divider()
+            Button("Duplicate Playlist") {
+                store.duplicatePlaylist(playlist)
+            }
+            Menu("Export Playlist") {
+                Button("Export as .pls (Winamp)...") {
+                    store.exportPlaylist(playlist, format: .pls)
+                }
+                Button("Export as .m3u8 (Extended M3U)...") {
+                    store.exportPlaylist(playlist, format: .m3u8)
                 }
             }
             Divider()
@@ -631,10 +697,24 @@ private struct SidebarDeviceDropCard: View {
                 Button {
                     store.navigate(to: .deviceSync(device.id))
                 } label: {
-                    Text(device.name)
-                        .font(.system(size: 12.5, weight: .bold))
-                        .foregroundStyle(isDropTargeted ? EchoTheme.neoMint : EchoTheme.textPrimary)
-                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        Text(device.name)
+                            .font(.system(size: 12.5, weight: .bold))
+                            .foregroundStyle(isDropTargeted ? EchoTheme.neoMint : EchoTheme.textPrimary)
+                            .lineLimit(1)
+
+                        if !device.isVirtualWireless, let vol, vol.connectionKind != .unknown {
+                            let isSD = vol.connectionKind.isCardReader
+                            let symbolName = isSD ? "sdcard.fill" : (vol.connectionKind == .inPlayer ? "hifispeaker.fill" : vol.connectionKind.iconName)
+                            let symbolColor: Color = vol.connectionKind == .inPlayer
+                                ? EchoTheme.neoMint
+                                : (vol.connectionKind == .usbCardReader ? EchoTheme.warningAmber : EchoTheme.neoCyan)
+                            Image(systemName: symbolName)
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(symbolColor)
+                                .help(vol.connectionSummary)
+                        }
+                    }
                 }
                 .buttonStyle(.plain)
                 .help("Open '\(device.name)' sync control center, profile settings, and pre-sync diff.")
@@ -687,52 +767,92 @@ private struct SidebarDeviceDropCard: View {
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 5) {
                         Text(device.preset.displayName)
-                            .font(.system(size: 10))
+                            .font(.system(size: 9.5))
                             .foregroundStyle(EchoTheme.textSecondary)
                             .lineLimit(1)
-                        Spacer(minLength: 2)
-                        if !device.isVirtualWireless, let vol, vol.connectionKind != .unknown {
-                            let badgeColor: Color = vol.connectionKind == .inPlayer ? EchoTheme.neoMint : (vol.connectionKind.isCardReader ? EchoTheme.warningAmber : EchoTheme.neoCyan)
-                            HStack(spacing: 3) {
-                                Image(systemName: vol.connectionKind.iconName)
-                                    .font(.system(size: 7.5, weight: .bold))
-                                Text(vol.connectionKind.shortBadge)
-                                    .font(.system(size: 7.5, weight: .black, design: .monospaced))
-                            }
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1.5)
-                            .background(badgeColor.opacity(0.16))
-                            .foregroundStyle(badgeColor)
-                            .clipShape(RoundedRectangle(cornerRadius: 3))
-                            .help(vol.connectionSummary)
-                        }
+                        Spacer(minLength: 4)
+                        Text(device.syncMode.displayName)
+                            .font(.system(size: 8.5, weight: .semibold))
+                            .foregroundStyle(EchoTheme.neoCyan.opacity(0.9))
+                            .lineLimit(1)
                     }
 
                     if let vol, vol.totalBytes > 0 {
-                        let ratio = min(1.0, max(0.0, Double(vol.usedBytes) / Double(vol.totalBytes)))
-                        VStack(alignment: .leading, spacing: 3) {
+                        let plan = store.cachedSyncPlan(for: device)
+                        let pendingBytes = max(Int64(0), plan?.estimatedBytesToWrite ?? 0)
+                        let total = Double(vol.totalBytes)
+                        let usedRatio = min(1.0, max(0.0, Double(vol.usedBytes) / total))
+                        let pendingRatio = min(max(0.0, 1.0 - usedRatio), Double(pendingBytes) / total)
+                        let exceedsFree = pendingBytes > vol.availableBytes
+                        let occupiedColor: Color = usedRatio > 0.9 ? EchoTheme.dangerCoral : EchoTheme.neoMint
+                        let pendingBarColor: Color = exceedsFree ? EchoTheme.dangerCoral.opacity(0.8) : Color(red: 0.0, green: 0.45, blue: 0.27)
+
+                        VStack(alignment: .leading, spacing: 4) {
                             GeometryReader { geo in
+                                let usedWidth = usedRatio > 0 ? max(3, geo.size.width * usedRatio) : 0
+                                let pendingWidth = pendingBytes > 0 ? max(3, min(geo.size.width - usedWidth, geo.size.width * pendingRatio)) : 0
                                 ZStack(alignment: .leading) {
-                                    RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.08))
                                     RoundedRectangle(cornerRadius: 2)
-                                        .fill(ratio > 0.9 ? EchoTheme.dangerCoral : accent)
-                                        .frame(width: max(4, geo.size.width * ratio))
+                                        .fill(Color.white.opacity(0.08))
+                                    HStack(spacing: 0) {
+                                        if usedWidth > 0 {
+                                            Rectangle()
+                                                .fill(occupiedColor)
+                                                .frame(width: usedWidth)
+                                        }
+                                        if pendingWidth > 0 {
+                                            Rectangle()
+                                                .fill(pendingBarColor)
+                                                .frame(width: pendingWidth)
+                                        }
+                                    }
+                                    .clipShape(RoundedRectangle(cornerRadius: 2))
                                 }
                             }
-                            .frame(height: 4)
-                            HStack {
-                                Text("\(Formatters.bytes(vol.availableBytes)) free")
-                                    .font(.system(size: 9.5, design: .monospaced))
-                                    .foregroundStyle(EchoTheme.textMuted)
-                                Spacer()
-                                Text(device.syncMode.displayName)
-                                    .font(.system(size: 9.5))
-                                    .foregroundStyle(EchoTheme.neoCyan)
+                            .frame(height: 4.5)
+
+                            HStack(alignment: .top, spacing: 4) {
+                                VStack(alignment: .leading, spacing: 0.5) {
+                                    Text(Formatters.compactBytesOneDecimal(vol.usedBytes))
+                                        .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                                        .foregroundStyle(occupiedColor.opacity(0.95))
+                                        .lineLimit(1)
+                                    Text("occupied")
+                                        .font(.system(size: 7.5))
+                                        .foregroundStyle(EchoTheme.textMuted)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+
+                                VStack(alignment: .center, spacing: 0.5) {
+                                    Text(Formatters.compactBytesOneDecimal(pendingBytes))
+                                        .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                                        .foregroundStyle(
+                                            exceedsFree
+                                                ? EchoTheme.dangerCoral
+                                                : (pendingBytes > 0 ? Color(red: 0.16, green: 0.72, blue: 0.48) : EchoTheme.textMuted)
+                                        )
+                                        .lineLimit(1)
+                                    Text("pending")
+                                        .font(.system(size: 7.5))
+                                        .foregroundStyle(EchoTheme.textMuted)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .center)
+
+                                VStack(alignment: .trailing, spacing: 0.5) {
+                                    Text(Formatters.compactBytesOneDecimal(vol.availableBytes))
+                                        .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                                        .foregroundStyle(EchoTheme.textSecondary)
+                                        .lineLimit(1)
+                                    Text("free")
+                                        .font(.system(size: 7.5))
+                                        .foregroundStyle(EchoTheme.textMuted)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .trailing)
                             }
                         }
                     } else {
-                        Text(connected ? "Ready · \(device.syncMode.displayName)" : "Offline · \(device.syncedTrackIDs.count) synced remembered")
-                            .font(.system(size: 9.5))
+                        Text(connected ? "Ready" : "Offline · \(device.syncedTrackIDs.count) synced remembered")
+                            .font(.system(size: 9))
                             .foregroundStyle(EchoTheme.textMuted)
                     }
                 }

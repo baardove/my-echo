@@ -756,6 +756,35 @@ struct AlbumLightboxView: View {
                             store.openArtist(name: artistName)
                         }
                     }
+
+                    HStack(spacing: 8) {
+                        let explicitRating = store.explicitAlbumRating(for: album) ?? 0
+                        let avgTrackRating = store.averageTrackRating(for: album)
+                        StarRatingControl(
+                            rating: explicitRating,
+                            derivedAverage: avgTrackRating,
+                            starSize: 12.5,
+                            spacing: 2.5,
+                            showEmptyWhenUnrated: true,
+                            labelPrefix: "Album Rating"
+                        ) { newRating in
+                            store.setAlbumRating(newRating, for: album)
+                        }
+                        if explicitRating > 0 {
+                            Text("\(explicitRating)/5")
+                                .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                                .foregroundStyle(EchoTheme.hiResGold)
+                        } else if let avgTrackRating {
+                            Text(String(format: "avg %.1f", avgTrackRating))
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(EchoTheme.textMuted)
+                        } else {
+                            Text("Rate album")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(EchoTheme.textMuted)
+                        }
+                    }
+                    .padding(.top, 4)
                 }
 
                 Spacer(minLength: 10)

@@ -809,6 +809,21 @@ private struct CompactAlbumGroupHeaderRow: View {
             .frame(minWidth: 180, maxWidth: .infinity, alignment: .leading)
             .help("Open album '\(title)'")
 
+            // Album Rating aligned with TrackRowView's `RATING` column
+            if let albumObj {
+                StarRatingControl(
+                    rating: store.explicitAlbumRating(for: albumObj) ?? 0,
+                    derivedAverage: store.averageTrackRating(for: albumObj),
+                    starSize: 9.5,
+                    spacing: 1.5,
+                    showEmptyWhenUnrated: isHovered,
+                    labelPrefix: "Album Rating"
+                ) { newRating in
+                    store.setAlbumRating(newRating, for: albumObj)
+                }
+                .frame(width: 68, alignment: .center)
+            }
+
             // Sync toggle aligned with TrackRowView's `S` column
             if let albumObj {
                 let isSynced = syncState == .full
@@ -1063,6 +1078,29 @@ struct AlbumCardView: View {
                         .help("Average online popularity score for '\(album.title)': \(albumPop)/100")
                     }
                 }
+                let explicitRating = store.explicitAlbumRating(for: album) ?? 0
+                let avgTrackRating = store.averageTrackRating(for: album)
+                if explicitRating > 0 || avgTrackRating != nil || isHovered {
+                    HStack(spacing: 5) {
+                        StarRatingControl(
+                            rating: explicitRating,
+                            derivedAverage: avgTrackRating,
+                            starSize: 9.5,
+                            spacing: 1.5,
+                            showEmptyWhenUnrated: true,
+                            labelPrefix: "Album Rating"
+                        ) { newRating in
+                            store.setAlbumRating(newRating, for: album)
+                        }
+                        if explicitRating == 0, let avg = avgTrackRating {
+                            Text(String(format: "%.1f", avg))
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(EchoTheme.textMuted)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.top, 1)
+                }
             }
         }
         .padding(12)
@@ -1075,7 +1113,36 @@ struct AlbumCardView: View {
                 .strokeBorder(state == .full ? EchoTheme.neoMint.opacity(0.35) : EchoTheme.border, lineWidth: 1)
         )
         .onHover { isHovered = $0 }
-        .onTapGesture { store.navigate(to: .albumDetail(album.id)) }
+        .onTapGesture { store.openAlbum(key: album.id) }
+        .contextMenu {
+            Button("Play Album") {
+                store.player.play(tracks: album.tracks, startingAt: 0)
+            }
+            Button("Open Album") {
+                store.openAlbum(key: album.id)
+            }
+            Divider()
+            Menu("Rate Album") {
+                let current = store.explicitAlbumRating(for: album) ?? 0
+                ForEach((1...5).reversed(), id: \.self) { stars in
+                    let glyphs = String(repeating: "★", count: stars) + String(repeating: "☆", count: 5 - stars)
+                    Button {
+                        store.setAlbumRating(stars, for: album)
+                    } label: {
+                        HStack {
+                            Text("\(glyphs) (\(stars))")
+                            if current == stars { Image(systemName: "checkmark") }
+                        }
+                    }
+                }
+                if current > 0 {
+                    Divider()
+                    Button("Clear Album Rating") {
+                        store.setAlbumRating(nil, for: album)
+                    }
+                }
+            }
+        }
         .draggable(EchoDragPayload.album(album.id).encode()) {
             DragPreviewPill(
                 title: album.title,
@@ -1159,6 +1226,48 @@ struct AlbumDetailView: View {
                                     }
                                 }
                                 .font(.system(size: 12.5))
+
+                                // Interactive 1–5 Star Album Rating Pill
+                                HStack(spacing: 8) {
+                                    let explicitRating = store.explicitAlbumRating(for: album) ?? 0
+                                    let avgTrackRating = store.averageTrackRating(for: album)
+                                    StarRatingControl(
+                                        rating: explicitRating,
+                                        derivedAverage: avgTrackRating,
+                                        starSize: 13,
+                                        spacing: 3,
+                                        showEmptyWhenUnrated: true,
+                                        labelPrefix: "Album Rating"
+                                    ) { newRating in
+                                        store.setAlbumRating(newRating, for: album)
+                                    }
+                                    if explicitRating > 0 {
+                                        Text("\(explicitRating)/5")
+                                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                            .foregroundStyle(EchoTheme.hiResGold)
+                                    } else if let avgTrackRating {
+                                        Text(String(format: "Tracks avg %.1f★", avgTrackRating))
+                                            .font(.system(size: 10.5, design: .monospaced))
+                                            .foregroundStyle(EchoTheme.textSecondary)
+                                    } else {
+                                        Text("Rate album")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(EchoTheme.textMuted)
+                                    }
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4.5)
+                                .background(Color.black.opacity(0.32))
+                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: EchoTheme.radiusSmall)
+                                        .strokeBorder(
+                                            (store.explicitAlbumRating(for: album) ?? 0) > 0
+                                                ? EchoTheme.hiResGold.opacity(0.45)
+                                                : EchoTheme.border,
+                                            lineWidth: 1
+                                        )
+                                )
 
                                 if let samplePath {
                                     HStack(spacing: 6) {
@@ -1327,7 +1436,7 @@ struct TracksView: View {
                             store.trackTableColumn = nil
                             store.trackSortOrder = newOrder
                             switch newOrder {
-                            case .mostPlayed, .onlinePopularity, .recentlyPlayed, .newArrivals:
+                            case .highestRated, .mostPlayed, .onlinePopularity, .recentlyPlayed, .newArrivals:
                                 store.trackSortAscending = false
                             case .library, .title, .artist:
                                 store.trackSortAscending = true
@@ -1385,15 +1494,20 @@ struct PlaylistDetailView: View {
     @State private var editDesc = ""
     @State private var isDropTargeted = false
     @State private var tracksSort = TrackTableSortState()
+    @State private var selectedRowIndex: Int? = nil
+    @FocusState private var focusedRowIndex: Int?
 
     var body: some View {
         if let playlist = store.playlists.first(where: { $0.id == playlistID }) {
             let playlistTracks = store.tracks(for: playlist)
+            let isPartyLocked = store.isPartyLockedPlaylist(playlist)
+            let partyCurrentTrack = isPartyLocked ? store.player.currentTrack : nil
+            let heroArtHash = partyCurrentTrack?.artworkHash ?? playlistTracks.first?.artworkHash
             let isSynced = store.isPlaylistSelected(playlist)
             let isFocused = store.focusedPlaylist?.id == playlist.id
             let totalDuration = playlistTracks.reduce(0) { $0 + $1.duration }
             let totalBytes = playlistTracks.reduce(Int64(0)) { $0 + $1.fileSize }
-            let glow = ArtworkImageLoader.shared.dominantColor(forHash: playlistTracks.first?.artworkHash, artworkCache: store.artworkCache)
+            let glow = ArtworkImageLoader.shared.dominantColor(forHash: heroArtHash, artworkCache: store.artworkCache)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
@@ -1406,18 +1520,24 @@ struct PlaylistDetailView: View {
                         .frame(height: 250)
 
                         HStack(alignment: .bottom, spacing: 22) {
-                            PlaylistMosaicArtwork(tracks: playlistTracks, artworkCache: store.artworkCache, cornerRadius: EchoTheme.radiusCard)
-                                .frame(width: 170, height: 170)
-                                .shadow(color: .black.opacity(0.55), radius: 18, y: 8)
-                                .draggable(EchoDragPayload.playlist(playlist.id).encode()) {
-                                    DragPreviewPill(
-                                        title: playlist.name,
-                                        subtitle: "Playlist",
-                                        artworkHash: playlistTracks.first?.artworkHash,
-                                        artworkCache: store.artworkCache,
-                                        badge: "\(playlistTracks.count) TRACKS"
-                                    )
+                            Group {
+                                if isPartyLocked, let playing = partyCurrentTrack {
+                                    ArtworkView(hash: playing.artworkHash, artworkCache: store.artworkCache, cornerRadius: EchoTheme.radiusCard, iconSize: 36)
+                                } else {
+                                    PlaylistMosaicArtwork(tracks: playlistTracks, artworkCache: store.artworkCache, cornerRadius: EchoTheme.radiusCard)
                                 }
+                            }
+                            .frame(width: 170, height: 170)
+                            .shadow(color: .black.opacity(0.55), radius: 18, y: 8)
+                            .draggable(EchoDragPayload.playlist(playlist.id).encode()) {
+                                DragPreviewPill(
+                                    title: playlist.name,
+                                    subtitle: "Playlist",
+                                    artworkHash: heroArtHash,
+                                    artworkCache: store.artworkCache,
+                                    badge: "\(playlistTracks.count) TRACKS"
+                                )
+                            }
 
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack(spacing: 8) {
@@ -1426,7 +1546,26 @@ struct PlaylistDetailView: View {
                                         .tracking(1.4)
                                         .foregroundStyle(EchoTheme.neoMint)
 
-                                    if isFocused {
+                                    if isPartyLocked {
+                                        Button {
+                                            store.navigate(to: .partyMode)
+                                        } label: {
+                                            Label(
+                                                store.partyServerPort > 0
+                                                    ? "PARTY MODE LOCKED · :\(String(store.partyServerPort))"
+                                                    : "PARTY MODE LOCKED",
+                                                systemImage: "lock.fill"
+                                            )
+                                            .font(.system(size: 9, weight: .black, design: .monospaced))
+                                            .padding(.horizontal, 7)
+                                            .padding(.vertical, 2.5)
+                                            .background(EchoTheme.neoMagenta.opacity(0.22))
+                                            .foregroundStyle(EchoTheme.neoMagenta)
+                                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                        }
+                                        .buttonStyle(.plain)
+                                        .help("Open Party Mode control center (QR code, guests, chat & port settings).")
+                                    } else if isFocused {
                                         Label("ACTIVE + TARGET", systemImage: "pin.fill")
                                             .font(.system(size: 9, weight: .black, design: .monospaced))
                                             .padding(.horizontal, 7)
@@ -1460,7 +1599,17 @@ struct PlaylistDetailView: View {
                                         .font(.system(size: 34, weight: .black, design: .rounded))
                                         .foregroundStyle(EchoTheme.textPrimary)
 
-                                    if !playlist.description.isEmpty {
+                                    if isPartyLocked, let playing = partyCurrentTrack {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: store.player.isPlaying ? "waveform" : "pause.fill")
+                                                .font(.system(size: 10.5, weight: .bold))
+                                                .foregroundStyle(EchoTheme.neoMint)
+                                            Text("Now Playing: \(playing.title) — \(playing.artist.isEmpty ? playing.effectiveArtist : playing.artist)")
+                                                .font(.system(size: 13, weight: .bold))
+                                                .foregroundStyle(EchoTheme.neoMint)
+                                                .lineLimit(1)
+                                        }
+                                    } else if !playlist.description.isEmpty {
                                         Text(playlist.description)
                                             .font(.system(size: 13))
                                             .foregroundStyle(EchoTheme.textSecondary)
@@ -1470,7 +1619,7 @@ struct PlaylistDetailView: View {
                                         .font(.system(size: 12.5))
                                         .foregroundStyle(EchoTheme.textSecondary)
 
-                                    if let dev = store.activeDevice {
+                                    if let dev = store.activeDevice, !store.isPartyPlaylist(playlist) {
                                         let m3uPath = PathFormatter.relativePlaylistPath(for: playlist, profile: dev)
                                         HStack(spacing: 10) {
                                             Toggle(isOn: Binding(
@@ -1504,7 +1653,11 @@ struct PlaylistDetailView: View {
 
                                 HStack(spacing: 8) {
                                     NeoPrimaryButton(title: "Play", icon: "play.fill", disabled: playlistTracks.isEmpty) {
-                                        store.player.play(tracks: playlistTracks, startingAt: 0)
+                                        if store.isPartyLockedPlaylist(playlist) {
+                                            store.playPartyModeTrack(at: 0)
+                                        } else {
+                                            store.player.play(tracks: playlistTracks, startingAt: 0)
+                                        }
                                     }
                                     .help("Play all tracks in '\(playlist.name)'.")
 
@@ -1554,7 +1707,105 @@ struct PlaylistDetailView: View {
                                 }
                                 .padding(.top, 4)
                             }
-                            Spacer()
+                            Spacer(minLength: 16)
+
+                            // Persistent Guest Address + Port + QR Code card on the right specifically for Partymode
+                            if isPartyLocked, let urlStr = store.partyServerURLString {
+                                HStack(spacing: 12) {
+                                    VStack(alignment: .trailing, spacing: 6) {
+                                        HStack(spacing: 5) {
+                                            Circle()
+                                                .fill(EchoTheme.neoMint)
+                                                .frame(width: 6.5, height: 6.5)
+                                                .shadow(color: EchoTheme.neoMint, radius: 4)
+                                            Text("GUEST WEB JUKEBOX")
+                                                .font(.system(size: 9, weight: .black, design: .monospaced))
+                                                .tracking(1.1)
+                                                .foregroundStyle(EchoTheme.neoCyan)
+                                        }
+
+                                        Text(urlStr)
+                                            .font(.system(size: 14, weight: .black, design: .monospaced))
+                                            .foregroundStyle(EchoTheme.neoMint)
+                                            .textSelection(.enabled)
+                                            .lineLimit(1)
+
+                                        HStack(spacing: 6) {
+                                            Button {
+                                                NSPasteboard.general.clearContents()
+                                                NSPasteboard.general.setString(urlStr, forType: .string)
+                                                store.showToast("Copied \(urlStr)")
+                                            } label: {
+                                                HStack(spacing: 3) {
+                                                    Image(systemName: "doc.on.doc")
+                                                    Text("Copy")
+                                                }
+                                                .font(.system(size: 10, weight: .bold))
+                                                .padding(.horizontal, 7)
+                                                .padding(.vertical, 4)
+                                                .background(EchoTheme.neoMint.opacity(0.16))
+                                                .foregroundStyle(EchoTheme.neoMint)
+                                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                                .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(EchoTheme.neoMint.opacity(0.5), lineWidth: 1))
+                                            }
+                                            .buttonStyle(.plain)
+
+                                            if let shareURL = URL(string: urlStr) {
+                                                NeoShareButton(
+                                                    items: [shareURL],
+                                                    title: "Share",
+                                                    accent: EchoTheme.neoMint,
+                                                    fontSize: 10,
+                                                    horizontalPadding: 7,
+                                                    verticalPadding: 4,
+                                                    helpText: "Share Guest Web Jukebox link via AirDrop, Messages, Mail, or other apps."
+                                                )
+                                            }
+
+                                            Button {
+                                                store.navigate(to: .partyMode)
+                                            } label: {
+                                                HStack(spacing: 3) {
+                                                    Image(systemName: "slider.horizontal.3")
+                                                    Text("Party Controls")
+                                                }
+                                                .font(.system(size: 10, weight: .bold))
+                                                .padding(.horizontal, 7)
+                                                .padding(.vertical, 4)
+                                                .background(EchoTheme.neoCyan.opacity(0.15))
+                                                .foregroundStyle(EchoTheme.neoCyan)
+                                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                                .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(EchoTheme.neoCyan.opacity(0.45), lineWidth: 1))
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
+
+                                    if let qr = PartyQRCodeGenerator.makeImage(from: urlStr) {
+                                        Image(nsImage: qr)
+                                            .interpolation(.none)
+                                            .resizable()
+                                            .scaledToFit()
+                                            .padding(10)
+                                            .frame(width: 170, height: 170)
+                                            .background(Color.white)
+                                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard))
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: EchoTheme.radiusCard)
+                                                    .strokeBorder(EchoTheme.neoMint.opacity(0.65), lineWidth: 1.5)
+                                            )
+                                            .shadow(color: .black.opacity(0.45), radius: 14, y: 6)
+                                            .help("Scan to open \(urlStr) on a phone.")
+                                    }
+                                }
+                                .padding(12)
+                                .background(Color.black.opacity(0.45))
+                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: EchoTheme.radiusCard)
+                                        .strokeBorder(EchoTheme.neoMint.opacity(0.38), lineWidth: 1)
+                                )
+                            }
                         }
                         .padding(26)
                     }
@@ -1584,26 +1835,122 @@ struct PlaylistDetailView: View {
                         .padding(.horizontal, 26)
                     } else {
                         let isCustomOrder = tracksSort.column == .index && tracksSort.ascending
-                        let displayedTracks = store.sortTracks(playlistTracks, by: tracksSort)
+                        let indexedSource: [(originalIndex: Int, track: Track)] = playlist.trackIDs.enumerated().compactMap { offset, tid in
+                            guard let t = store.tracksByID[tid] else { return nil }
+                            return (offset, t)
+                        }
+                        let displayedEntries: [(originalIndex: Int, track: Track)] = {
+                            if isCustomOrder { return indexedSource }
+                            let sorted = store.sortTracks(indexedSource.map(\.track), by: tracksSort)
+                            var buckets: [String: [Int]] = [:]
+                            for entry in indexedSource {
+                                buckets[entry.track.id, default: []].append(entry.originalIndex)
+                            }
+                            var cursor: [String: Int] = [:]
+                            return sorted.compactMap { track in
+                                let pos = cursor[track.id, default: 0]
+                                guard let indices = buckets[track.id], pos < indices.count else { return nil }
+                                cursor[track.id] = pos + 1
+                                return (indices[pos], track)
+                            }
+                        }()
+                        let displayedTracks = displayedEntries.map(\.track)
+
                         VStack(spacing: 2) {
                             SortableTrackTableHeader(showAlbum: true, isPlaylist: true, sortState: $tracksSort)
                             Divider().overlay(EchoTheme.border).padding(.bottom, 4)
 
-                            ForEach(Array(displayedTracks.enumerated()), id: \.offset) { idx, track in
+                            let isPartymodePlaylist = isPartyLocked || playlist.name.caseInsensitiveCompare(EchoStore.partyPlaylistName) == .orderedSame
+                            ForEach(Array(displayedEntries.enumerated()), id: \.offset) { idx, entry in
                                 TrackRowView(
-                                    track: track,
+                                    track: entry.track,
                                     index: idx,
                                     showAlbumColumn: true,
-                                    playlistContext: isCustomOrder ? (playlist.id, idx) : nil
+                                    playlistContext: (playlist.id, entry.originalIndex),
+                                    allowPlaylistReorder: isCustomOrder,
+                                    isSelected: selectedRowIndex == idx || focusedRowIndex == idx,
+                                    partyRequester: isPartymodePlaylist ? store.partyRequesterName(for: entry.track.id) : nil,
+                                    partyVoiceIntroDuration: isPartymodePlaylist ? store.partyVoiceIntrosByTrackID[entry.track.id]?.duration : nil,
+                                    onRemovePartyVoiceIntro: isPartymodePlaylist ? {
+                                        store.deletePartyVoiceIntro(trackID: entry.track.id, fromHost: true)
+                                    } : nil,
+                                    onSelect: {
+                                        selectedRowIndex = idx
+                                        focusedRowIndex = idx
+                                    }
                                 ) {
-                                    store.player.play(tracks: displayedTracks, startingAt: idx)
+                                    if store.isPartyLockedPlaylist(playlist) && isCustomOrder {
+                                        store.playPartyModeTrack(at: idx)
+                                    } else {
+                                        store.player.play(tracks: displayedTracks, startingAt: idx)
+                                    }
                                 }
+                                .focusable()
+                                .focusEffectDisabled()
+                                .focused($focusedRowIndex, equals: idx)
                             }
                         }
                         .padding(.horizontal, 26)
                         .padding(.bottom, 28)
+                        .background(
+                            WindowKeyDownMonitor { event in
+                                guard !isEditing, store.lightboxAlbum == nil else { return false }
+                                switch event.keyCode {
+                                case 51, 117: // Delete (Backspace) or Forward Delete
+                                    guard let targetIdx = selectedRowIndex ?? focusedRowIndex,
+                                          targetIdx >= 0 && targetIdx < displayedEntries.count else {
+                                        return false
+                                    }
+                                    let origIdx = displayedEntries[targetIdx].originalIndex
+                                    store.removeTrack(at: origIdx, fromPlaylistID: playlist.id)
+                                    let remaining = displayedEntries.count - 1
+                                    let nextSel: Int? = remaining > 0 ? min(targetIdx, remaining - 1) : nil
+                                    selectedRowIndex = nextSel
+                                    focusedRowIndex = nextSel
+                                    return true
+                                case 125: // Down arrow
+                                    guard !displayedEntries.isEmpty, let cur = selectedRowIndex ?? focusedRowIndex else { return false }
+                                    let next = min(displayedEntries.count - 1, cur + 1)
+                                    selectedRowIndex = next
+                                    focusedRowIndex = next
+                                    return true
+                                case 126: // Up arrow
+                                    guard !displayedEntries.isEmpty, let cur = selectedRowIndex ?? focusedRowIndex else { return false }
+                                    let prev = max(0, cur - 1)
+                                    selectedRowIndex = prev
+                                    focusedRowIndex = prev
+                                    return true
+                                case 36, 76: // Return / Enter
+                                    guard let targetIdx = selectedRowIndex ?? focusedRowIndex,
+                                          targetIdx >= 0 && targetIdx < displayedEntries.count else {
+                                        return false
+                                    }
+                                    if store.isPartyLockedPlaylist(playlist) && isCustomOrder {
+                                        store.playPartyModeTrack(at: targetIdx)
+                                    } else {
+                                        store.player.play(tracks: displayedTracks, startingAt: targetIdx)
+                                    }
+                                    return true
+                                case 53: // Escape
+                                    guard selectedRowIndex != nil || focusedRowIndex != nil else { return false }
+                                    selectedRowIndex = nil
+                                    focusedRowIndex = nil
+                                    return true
+                                default:
+                                    return false
+                                }
+                            }
+                        )
                     }
                 }
+            }
+            .onChange(of: playlistID) { _, _ in
+                selectedRowIndex = nil
+                focusedRowIndex = nil
+            }
+            .onChange(of: tracksSort) { _, _ in
+                selectedRowIndex = nil
+                focusedRowIndex = nil
             }
             .overlay(
                 RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous)
@@ -1818,6 +2165,7 @@ struct SortableTrackTableHeader: View {
             }
             sortableColumn(column: .plays, title: "PLAYS", width: 44, alignment: .trailing, tip: "Sort by your personal play count.")
             sortableColumn(column: .popularity, title: "POP", width: 50, alignment: .trailing, tip: "Sort by online popularity score.")
+            sortableColumn(column: .rating, title: "RATING", width: 68, alignment: .center, tip: "Sort by your 1–5 star track rating.")
             sortableColumn(column: .format, title: "FORMAT", width: 86, alignment: .center, tip: "Sort by audio quality (DSD / Hi-Res / Lossless / Bitrate).")
             Text(isPlaylist ? "MOVE" : "P")
                 .frame(width: 30)
@@ -1893,6 +2241,8 @@ private func trackTableHeader(showAlbum: Bool, isPlaylist: Bool = false) -> some
             .frame(width: 44, alignment: .trailing)
         Text("POP")
             .frame(width: 50, alignment: .trailing)
+        Text("RATING")
+            .frame(width: 68, alignment: .center)
         Text("FORMAT")
             .frame(width: 86, alignment: .center)
         Text(isPlaylist ? "MOVE" : "P")

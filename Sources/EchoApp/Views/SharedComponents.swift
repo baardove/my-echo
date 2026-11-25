@@ -382,6 +382,152 @@ struct UserPlayCountBadge: View {
     }
 }
 
+/// Interactive 1–5 star rating control with hover preview and click-active-star-to-clear.
+struct StarRatingControl: View {
+    let rating: Int
+    var derivedAverage: Double? = nil
+    var starSize: CGFloat = 10
+    var spacing: CGFloat = 2
+    var showEmptyWhenUnrated: Bool = true
+    var labelPrefix: String = "Rating"
+    var onSetRating: (Int?) -> Void
+
+    @State private var hoveredStar: Int? = nil
+
+    var body: some View {
+        let derivedRounded = derivedAverage.map { Int($0.rounded()) } ?? 0
+
+        HStack(spacing: spacing) {
+            ForEach(1...5, id: \.self) { star in
+                let isFilled: Bool = {
+                    if let h = hoveredStar { return star <= h }
+                    return rating > 0 && star <= rating
+                }()
+                let isDerivedLit = hoveredStar == nil && rating == 0 && derivedRounded > 0 && star <= derivedRounded
+
+                Button {
+                    if rating == star {
+                        onSetRating(nil)
+                    } else {
+                        onSetRating(star)
+                    }
+                } label: {
+                    Image(systemName: (isFilled || isDerivedLit) ? "star.fill" : "star")
+                        .font(.system(size: starSize, weight: .semibold))
+                        .foregroundStyle(
+                            isFilled
+                                ? EchoTheme.hiResGold
+                                : (isDerivedLit
+                                   ? EchoTheme.hiResGold.opacity(0.42)
+                                   : (hoveredStar != nil || showEmptyWhenUnrated
+                                      ? EchoTheme.textMuted.opacity(hoveredStar != nil ? 0.55 : 0.28)
+                                      : Color.clear))
+                        )
+                        .frame(minWidth: starSize + 1, minHeight: starSize + 4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { hovering in
+                    if hovering {
+                        hoveredStar = star
+                    } else if hoveredStar == star {
+                        hoveredStar = nil
+                    }
+                }
+            }
+        }
+        .help(tooltipText)
+    }
+
+    private var tooltipText: String {
+        if rating > 0 {
+            return "\(labelPrefix): \(rating)/5 stars (click star \(rating) again to clear)."
+        }
+        if let avg = derivedAverage, avg > 0 {
+            return String(format: "Average track rating: %.1f/5 — click stars to set your explicit album rating.", avg)
+        }
+        return "Click a star to rate 1–5 stars."
+    }
+}
+
+/// Top-bar minimum star rating filter pill ("at least X stars").
+struct TopBarStarFilterPill: View {
+    @Binding var minStars: Int
+    @State private var hoveredStar: Int? = nil
+
+    var body: some View {
+        let isActive = minStars > 0
+        let preview = hoveredStar ?? minStars
+
+        HStack(spacing: 5) {
+            HStack(spacing: 2) {
+                ForEach(1...5, id: \.self) { star in
+                    let lit = star <= preview
+                    Button {
+                        minStars = (minStars == star) ? 0 : star
+                    } label: {
+                        Image(systemName: lit ? "star.fill" : "star")
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(
+                                lit
+                                    ? EchoTheme.hiResGold
+                                    : EchoTheme.textMuted.opacity(0.55)
+                            )
+                            .frame(minWidth: 11.5, minHeight: 14)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { hovering in
+                        if hovering {
+                            hoveredStar = star
+                        } else if hoveredStar == star {
+                            hoveredStar = nil
+                        }
+                    }
+                }
+            }
+
+            if isActive {
+                Text("\(minStars)+")
+                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                    .foregroundStyle(EchoTheme.hiResGold)
+
+                Button {
+                    minStars = 0
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8.5, weight: .bold))
+                        .foregroundStyle(EchoTheme.textMuted)
+                }
+                .buttonStyle(.plain)
+                .help("Clear minimum star rating filter.")
+            }
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(
+            ZStack {
+                EchoTheme.surfaceElevated.opacity(0.88)
+                if isActive { EchoTheme.hiResGold.opacity(0.12) }
+            }
+        )
+        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                .strokeBorder(
+                    isActive ? EchoTheme.hiResGold.opacity(0.85) : EchoTheme.border.opacity(0.9),
+                    lineWidth: 1
+                )
+        )
+        .fixedSize()
+        .help(
+            isActive
+                ? "Showing items rated at least \(minStars) star\(minStars == 1 ? "" : "s"). Click \(minStars)★ again or × to clear."
+                : "Filter search by minimum star rating (at least 1–5 stars)."
+        )
+    }
+}
+
 struct SyncStatePillButton: View {
     let state: SyncSelectionState
     var compact: Bool = false
@@ -1002,12 +1148,150 @@ struct DragPreviewPill: View {
     }
 }
 
+/// AppKit-backed native macOS Share button (`NSSharingServicePicker`) that keeps crisp custom neon styling.
+struct NeoShareButton: View {
+    let items: [Any]
+    var title: String = "Share"
+    var accent: Color = EchoTheme.neoMint
+    var fontSize: CGFloat = 11
+    var horizontalPadding: CGFloat = 9
+    var verticalPadding: CGFloat = 5
+    var helpText: String = "Share via AirDrop, Messages, Mail, or other macOS apps."
+
+    @State private var anchorView: NSView?
+
+    var body: some View {
+        Button {
+            guard !items.isEmpty, let view = anchorView else { return }
+            let picker = NSSharingServicePicker(items: items)
+            picker.show(relativeTo: view.bounds, of: view, preferredEdge: .minY)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "square.and.arrow.up")
+                Text(title)
+            }
+            .font(.system(size: fontSize, weight: .bold))
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, verticalPadding)
+            .background(accent.opacity(0.15))
+            .foregroundStyle(accent)
+            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+            .overlay(
+                RoundedRectangle(cornerRadius: EchoTheme.radiusSmall)
+                    .strokeBorder(accent.opacity(0.5), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .background(
+            ShareAnchorView { view in
+                anchorView = view
+            }
+        )
+        .help(helpText)
+    }
+}
+
+private struct ShareAnchorView: NSViewRepresentable {
+    var onResolve: (NSView) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { onResolve(view) }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { onResolve(nsView) }
+    }
+}
+
+/// Scopes a local `.keyDown` monitor to the host SwiftUI view's `NSWindow`.
+/// Automatically ignores events when the window isn't key, when typing in any `NSTextView`,
+/// or when Command/Control/Option modifiers are held.
+struct WindowKeyDownMonitor: NSViewRepresentable {
+    var onKeyDown: (NSEvent) -> Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onKeyDown: onKeyDown)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        context.coordinator.hostView = view
+        context.coordinator.install()
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.hostView = nsView
+        context.coordinator.onKeyDown = onKeyDown
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.uninstall()
+    }
+
+    @MainActor
+    final class Coordinator {
+        var onKeyDown: (NSEvent) -> Bool
+        weak var hostView: NSView?
+        nonisolated(unsafe) private var monitor: Any?
+
+        init(onKeyDown: @escaping (NSEvent) -> Bool) {
+            self.onKeyDown = onKeyDown
+        }
+
+        func install() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                let consumed: Bool = MainActor.assumeIsolated {
+                    guard let self,
+                          let window = self.hostView?.window,
+                          window.isKeyWindow,
+                          event.window === window else {
+                        return false
+                    }
+                    // Never steal keys while editing inside a TextField or TextEditor
+                    if window.firstResponder is NSTextView {
+                        return false
+                    }
+                    let disallowed: NSEvent.ModifierFlags = [.command, .control, .option]
+                    if !event.modifierFlags.intersection(disallowed).isEmpty {
+                        return false
+                    }
+                    return self.onKeyDown(event)
+                }
+                return consumed ? nil : event
+            }
+        }
+
+        func uninstall() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+
+        deinit {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
+        }
+    }
+}
+
 struct TrackRowView: View {
     @Environment(EchoStore.self) private var store
     let track: Track
     let index: Int
     var showAlbumColumn: Bool = true
     var playlistContext: (id: UUID, rowIndex: Int)? = nil
+    var allowPlaylistReorder: Bool = true
+    var isSelected: Bool = false
+    var partyRequester: String? = nil
+    var partyVoiceIntroDuration: TimeInterval? = nil
+    var onRemovePartyVoiceIntro: (() -> Void)? = nil
+    var onSelect: (() -> Void)? = nil
     let onPlay: () -> Void
 
     @State private var isHovered = false
@@ -1031,7 +1315,7 @@ struct TrackRowView: View {
     }
 
     private var dragPayloadString: String {
-        if let ctx = playlistContext {
+        if let ctx = playlistContext, allowPlaylistReorder {
             return EchoDragPayload.reorder(playlistID: ctx.id, sourceIndex: ctx.rowIndex).encode()
         }
         return EchoDragPayload.tracks([track.id]).encode()
@@ -1049,10 +1333,10 @@ struct TrackRowView: View {
                 )
             }
             .dropDestination(for: String.self) { items, _ in
-                guard let ctx = playlistContext else { return false }
+                guard let ctx = playlistContext, allowPlaylistReorder else { return false }
                 return store.handlePlaylistReorderDrop(items: items, playlistID: ctx.id, targetIndex: ctx.rowIndex)
             } isTargeted: { targeted in
-                if playlistContext != nil {
+                if playlistContext != nil && allowPlaylistReorder {
                     isReorderDropTargeted = targeted
                 }
             }
@@ -1115,6 +1399,48 @@ struct TrackRowView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 3))
                                 .help("Synced .lrc lyrics file detected — will copy alongside this track.")
                         }
+                        if let requester = partyRequester, !requester.isEmpty {
+                            HStack(spacing: 3) {
+                                Image(systemName: "person.fill")
+                                    .font(.system(size: 8, weight: .bold))
+                                Text(requester)
+                                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                    .lineLimit(1)
+                            }
+                            .padding(.horizontal, 5.5)
+                            .padding(.vertical, 1.5)
+                            .background(EchoTheme.neoCyan.opacity(0.16))
+                            .foregroundStyle(EchoTheme.neoCyan)
+                            .clipShape(RoundedRectangle(cornerRadius: 3.5))
+                            .overlay(RoundedRectangle(cornerRadius: 3.5).strokeBorder(EchoTheme.neoCyan.opacity(0.38), lineWidth: 0.7))
+                            .help("Requested by \(requester)")
+                        }
+                        if let introDur = partyVoiceIntroDuration {
+                            let secs = max(1, Int(introDur.rounded()))
+                            let micPill = HStack(spacing: 3) {
+                                Image(systemName: "mic.fill")
+                                    .font(.system(size: 8.5, weight: .bold))
+                                Text("\(secs)s")
+                                    .font(.system(size: 9, weight: .black, design: .monospaced))
+                            }
+                            .padding(.horizontal, 5.5)
+                            .padding(.vertical, 1.5)
+                            .background(EchoTheme.neoMagenta.opacity(0.20))
+                            .foregroundStyle(EchoTheme.neoMagenta)
+                            .clipShape(RoundedRectangle(cornerRadius: 3.5))
+                            .overlay(RoundedRectangle(cornerRadius: 3.5).strokeBorder(EchoTheme.neoMagenta.opacity(0.55), lineWidth: 0.8))
+
+                            if let onRemove = onRemovePartyVoiceIntro {
+                                Button(action: onRemove) {
+                                    micPill
+                                }
+                                .buttonStyle(.plain)
+                                .help("Voice intro attached (\(secs)s). Click to remove.")
+                            } else {
+                                micPill
+                                    .help("Voice intro attached (\(secs)s).")
+                            }
+                        }
                     }
 
                     HStack(spacing: 6) {
@@ -1156,6 +1482,17 @@ struct TrackRowView: View {
             OnlinePopularityMeter(stats: trackStat)
                 .frame(width: 50, alignment: .trailing)
 
+            StarRatingControl(
+                rating: trackStat.userRating ?? 0,
+                starSize: 9.5,
+                spacing: 1.5,
+                showEmptyWhenUnrated: isHovered || isSelected,
+                labelPrefix: "Track Rating"
+            ) { newRating in
+                store.setUserRating(newRating, for: track)
+            }
+            .frame(width: 68, alignment: .center)
+
             FormatBadge(track: track, isUnsupported: isUnsupported)
                 .frame(width: 86, alignment: .center)
 
@@ -1189,8 +1526,16 @@ struct TrackRowView: View {
                 HStack(spacing: 4) {
                     Image(systemName: "line.3.horizontal")
                         .font(.system(size: 10.5))
-                        .foregroundStyle(isHovered ? EchoTheme.textSecondary : EchoTheme.textMuted.opacity(0.45))
-                        .help("Drag this row up or down to reorder inside the playlist, or drag onto another playlist/device in the sidebar.")
+                        .foregroundStyle(
+                            allowPlaylistReorder
+                                ? (isHovered ? EchoTheme.textSecondary : EchoTheme.textMuted.opacity(0.45))
+                                : EchoTheme.textMuted.opacity(0.22)
+                        )
+                        .help(
+                            allowPlaylistReorder
+                                ? "Drag this row up or down to reorder inside the playlist, or drag onto another playlist/device in the sidebar."
+                                : "Sort by # (ascending) to drag-reorder rows inside the playlist."
+                        )
                 }
                 .frame(width: 30)
             }
@@ -1229,81 +1574,7 @@ struct TrackRowView: View {
 
             // Quick Actions Menu (includes Multi-Destination submenu)
             Menu {
-                Button("Play Now") { onPlay() }
-                Button("Play Next") { store.player.enqueueNext(track) }
-                Button("Add to Queue") { store.player.addToQueue(track) }
-                Divider()
-                let parsedArtists = ArtistNameParser.artistNames(track.artist)
-                if parsedArtists.count > 1 {
-                    Menu("Go to Artist") {
-                        ForEach(parsedArtists, id: \.self) { name in
-                            Button(name) {
-                                store.openArtist(name: name)
-                            }
-                        }
-                    }
-                } else {
-                    Button("Go to Artist (\(parsedArtists.first ?? track.effectiveArtist))") {
-                        store.openArtist(name: parsedArtists.first ?? track.effectiveArtist)
-                    }
-                }
-                Button("Go to Album (\(track.effectiveAlbum))") {
-                    store.openAlbum(forTrack: track)
-                }
-                Divider()
-                if let focused = store.focusedPlaylist {
-                    Button(isInFocusedPlaylist ? "Remove from '\(focused.name)'" : "Add to '\(focused.name)' (+)") {
-                        store.toggleTrackInFocusedPlaylist(track)
-                    }
-                }
-                if !store.devices.isEmpty {
-                    Menu("Sync Destinations") {
-                        ForEach(store.devices) { dev in
-                            let assigned = store.isTrackAssigned(track, to: dev)
-                            let synced = dev.syncedTrackIDs.contains(track.id)
-                            Button {
-                                store.toggleTrackSync(track, onDeviceID: dev.id)
-                            } label: {
-                                HStack {
-                                    Text("\(dev.name)\(synced ? " (Synced)" : "")")
-                                    if assigned { Image(systemName: "checkmark") }
-                                }
-                            }
-                        }
-                    }
-                }
-                Menu("Add to Playlist") {
-                    if store.playlists.isEmpty {
-                        Button("Create New Playlist...") {
-                            let pl = store.createPlaylist(name: "My Playlist", initialTrackIDs: [track.id])
-                            store.navigate(to: .playlist(pl.id))
-                        }
-                    } else {
-                        ForEach(store.playlists) { pl in
-                            Button(pl.name) {
-                                store.addTracks([track], toPlaylistID: pl.id)
-                            }
-                        }
-                    }
-                }
-                if let ctx = playlistContext {
-                    Divider()
-                    Button("Remove from Playlist", role: .destructive) {
-                        store.removeTrack(at: ctx.rowIndex, fromPlaylistID: ctx.id)
-                    }
-                }
-                Divider()
-                Button("Fetch Online Popularity") {
-                    store.fetchPopularity(forTrack: track)
-                }
-                if store.userPlayCount(for: track) > 0 {
-                    Button("Reset Play Count (\(store.userPlayCount(for: track)))") {
-                        store.resetUserPlayCount(for: track)
-                    }
-                }
-                Button("Reveal in Finder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: track.filePath)])
-                }
+                trackMenuItems
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 12))
@@ -1318,7 +1589,16 @@ struct TrackRowView: View {
         .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
-                .fill(isHovered ? EchoTheme.surfaceElevated.opacity(0.78) : (isCurrentlyPlaying ? EchoTheme.neoMint.opacity(0.07) : Color.clear))
+                .fill(
+                    isSelected
+                        ? EchoTheme.neoMint.opacity(0.16)
+                        : (isHovered ? EchoTheme.surfaceElevated.opacity(0.78) : (isCurrentlyPlaying ? EchoTheme.neoMint.opacity(0.07) : Color.clear))
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                .strokeBorder(isSelected ? EchoTheme.neoMint.opacity(0.65) : Color.clear, lineWidth: 1)
+                .allowsHitTesting(false)
         )
         .overlay(alignment: .top) {
             if isReorderDropTargeted {
@@ -1330,7 +1610,118 @@ struct TrackRowView: View {
         }
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
-        .onTapGesture(count: 2) { onPlay() }
+        .onTapGesture(count: 2) {
+            onSelect?()
+            onPlay()
+        }
+        .simultaneousGesture(
+            TapGesture(count: 1).onEnded {
+                onSelect?()
+            }
+        )
+        .contextMenu {
+            trackMenuItems
+        }
+    }
+
+    @ViewBuilder
+    private var trackMenuItems: some View {
+        Button("Play Now") { onPlay() }
+        Button("Play Next") { store.player.enqueueNext(track) }
+        Button("Add to Queue") { store.player.addToQueue(track) }
+        Divider()
+        let parsedArtists = ArtistNameParser.artistNames(track.artist)
+        if parsedArtists.count > 1 {
+            Menu("Go to Artist") {
+                ForEach(parsedArtists, id: \.self) { name in
+                    Button(name) {
+                        store.openArtist(name: name)
+                    }
+                }
+            }
+        } else {
+            Button("Go to Artist (\(parsedArtists.first ?? track.effectiveArtist))") {
+                store.openArtist(name: parsedArtists.first ?? track.effectiveArtist)
+            }
+        }
+        Button("Go to Album (\(track.effectiveAlbum))") {
+            store.openAlbum(forTrack: track)
+        }
+        Divider()
+        if let focused = store.focusedPlaylist, playlistContext?.id != focused.id {
+            Button(isInFocusedPlaylist ? "Remove from '\(focused.name)'" : "Add to '\(focused.name)' (+)") {
+                store.toggleTrackInFocusedPlaylist(track)
+            }
+        }
+        if !store.devices.isEmpty {
+            Menu("Sync Destinations") {
+                ForEach(store.devices) { dev in
+                    let assigned = store.isTrackAssigned(track, to: dev)
+                    let synced = dev.syncedTrackIDs.contains(track.id)
+                    Button {
+                        store.toggleTrackSync(track, onDeviceID: dev.id)
+                    } label: {
+                        HStack {
+                            Text("\(dev.name)\(synced ? " (Synced)" : "")")
+                            if assigned { Image(systemName: "checkmark") }
+                        }
+                    }
+                }
+            }
+        }
+        let targetPlaylists = store.playlists.filter { $0.id != playlistContext?.id }
+        Menu(playlistContext != nil ? "Add to Another Playlist" : "Add to Playlist") {
+            ForEach(targetPlaylists) { pl in
+                Button(pl.name) {
+                    store.addTracks([track], toPlaylistID: pl.id)
+                }
+            }
+            if !targetPlaylists.isEmpty {
+                Divider()
+            }
+            Button("Create New Playlist...") {
+                let pl = store.createPlaylist(name: "My Playlist", initialTrackIDs: [track.id])
+                store.navigate(to: .playlist(pl.id))
+            }
+        }
+        if let ctx = playlistContext {
+            Divider()
+            Button("Remove from Playlist", role: .destructive) {
+                store.removeTrack(at: ctx.rowIndex, fromPlaylistID: ctx.id)
+            }
+        }
+        Divider()
+        Menu("Rate Track") {
+            let currentRating = store.userRating(for: track)
+            ForEach((1...5).reversed(), id: \.self) { stars in
+                let glyphs = String(repeating: "★", count: stars) + String(repeating: "☆", count: 5 - stars)
+                Button {
+                    store.setUserRating(stars, for: track)
+                } label: {
+                    HStack {
+                        Text("\(glyphs) (\(stars))")
+                        if currentRating == stars { Image(systemName: "checkmark") }
+                    }
+                }
+            }
+            if currentRating > 0 {
+                Divider()
+                Button("Clear Rating") {
+                    store.setUserRating(nil, for: track)
+                }
+            }
+        }
+        Button("Fetch Online Popularity") {
+            store.fetchPopularity(forTrack: track)
+        }
+        if store.userPlayCount(for: track) > 0 {
+            Button("Reset Play Count (\(store.userPlayCount(for: track)))") {
+                store.resetUserPlayCount(for: track)
+            }
+        }
+        Button("Reveal in Finder") {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: track.filePath)])
+        }
     }
 
     private var focusedPlaylistButtonTooltip: String {

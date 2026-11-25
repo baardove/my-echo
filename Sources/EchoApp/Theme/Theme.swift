@@ -592,6 +592,24 @@ enum Formatters {
         ByteCountFormatter.string(fromByteCount: max(0, count), countStyle: .file)
     }
 
+    /// Compact 1-decimal decimal-SI byte string (e.g. "38.3 GB", "420.5 MB", "0.0 MB").
+    static func compactBytesOneDecimal(_ count: Int64) -> String {
+        let clamped = max(0, count)
+        if clamped >= 1_000_000_000_000 {
+            return String(format: "%.1f TB", Double(clamped) / 1_000_000_000_000.0)
+        }
+        if clamped >= 1_000_000_000 {
+            return String(format: "%.1f GB", Double(clamped) / 1_000_000_000.0)
+        }
+        if clamped >= 1_000_000 {
+            return String(format: "%.1f MB", Double(clamped) / 1_000_000.0)
+        }
+        if clamped >= 1_000 {
+            return String(format: "%.1f KB", Double(clamped) / 1_000.0)
+        }
+        return "0.0 MB"
+    }
+
     static func compactCount(_ count: Int) -> String {
         let absVal = abs(count)
         if absVal >= 1_000_000 {

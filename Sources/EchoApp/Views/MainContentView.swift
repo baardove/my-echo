@@ -224,9 +224,65 @@ struct MainContentView: View {
                     RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
                         .strokeBorder(EchoTheme.neoMint.opacity(store.isGlobalSearchActive ? 0.85 : 0.42), lineWidth: 1)
                 )
+
+                if !store.isViewingPodcasts && !store.isLidarrLibraryScope {
+                    TopBarStarFilterPill(minStars: Binding(
+                        get: { store.minStarRating },
+                        set: { store.minStarRating = $0 }
+                    ))
+                }
             }
 
             Spacer()
+
+            // Party Mode Quick Toggle / Live Status Pill
+            Button {
+                if store.isPartyModeEnabled {
+                    store.clearGlobalSearch()
+                    store.isLidarrLibraryScope = false
+                    store.navigate(to: .partyMode)
+                } else {
+                    store.startPartyMode(navigateToView: true)
+                }
+            } label: {
+                let isLive = store.isPartyModeEnabled
+                let accent = isLive ? EchoTheme.neoMagenta : EchoTheme.neoCyan
+                HStack(spacing: 5.5) {
+                    if isLive {
+                        Circle()
+                            .fill(EchoTheme.neoMint)
+                            .frame(width: 6.5, height: 6.5)
+                            .shadow(color: EchoTheme.neoMint, radius: 4)
+                    } else {
+                        Image(systemName: "dot.radiowaves.left.and.right")
+                            .font(.system(size: 10.5, weight: .bold))
+                            .foregroundStyle(accent)
+                    }
+                    Text(isLive ? (store.partyServerPort > 0 ? "PARTY :\(String(store.partyServerPort))" : "PARTY LIVE") : "Party Mode")
+                        .font(.system(size: 11, weight: .bold, design: isLive ? .monospaced : .default))
+                        .foregroundStyle(isLive ? EchoTheme.textPrimary : EchoTheme.textSecondary)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    ZStack {
+                        EchoTheme.surfaceElevated
+                        accent.opacity(isLive ? 0.18 : 0.05)
+                    }
+                )
+                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                        .strokeBorder(accent.opacity(isLive ? 0.85 : 0.45), lineWidth: 1)
+                )
+                .shadow(color: isLive ? accent.opacity(0.28) : .clear, radius: 6, y: 1)
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
+            .help(store.isPartyModeEnabled
+                  ? "Party Mode is active (locked to 'Partymode', web server on \(store.partyServerURLString ?? "starting...")). Click to open Party Mode control center."
+                  : "Start Party Mode: lock playback onto dynamic playlist 'Partymode' and spin up a guest web server on a random port.")
 
             // Focused Playlist Quick-Target Picker
             NeoMenuButton {
@@ -454,6 +510,8 @@ struct MainContentView: View {
                 PodcastDetailView(showID: id)
             case .playlist(let id):
                 PlaylistDetailView(playlistID: id)
+            case .partyMode:
+                PartyModeView()
             case .lidarr:
                 LidarrView()
             case .sources:
@@ -504,7 +562,16 @@ struct GlobalSearchResultsView: View {
                             .tracking(1.4)
                             .foregroundStyle(EchoTheme.neoCyan)
 
-                        Text("Results for \"\(query)\"")
+                        let heading: String = {
+                            if !query.isEmpty && store.minStarRating > 0 {
+                                return "Results for \"\(query)\" · \(store.minStarRating)+ ★"
+                            } else if store.minStarRating > 0 {
+                                return "Rated \(store.minStarRating)+ Stars"
+                            } else {
+                                return "Results for \"\(query)\""
+                            }
+                        }()
+                        Text(heading)
                             .font(.system(size: 24, weight: .black, design: .rounded))
                             .foregroundStyle(EchoTheme.textPrimary)
                     }
@@ -513,12 +580,12 @@ struct GlobalSearchResultsView: View {
                     if store.isViewingPodcasts {
                         NeoPrimaryButton(title: "Search Directories", icon: "magnifyingglass") {
                             store.podcastSearchQuery = query
-                            store.searchQuery = ""
+                            store.clearGlobalSearch()
                             store.navigate(to: .podcasts)
                             store.searchPodcasts()
                         }
                         .help("Run '\(query)' against Apple Podcasts & gPodder Open Directories to discover new shows.")
-                    } else if !store.isLidarrLibraryScope && store.lidarrConfig.isEnabled {
+                    } else if !store.isLidarrLibraryScope && store.lidarrConfig.isEnabled && !query.isEmpty {
                         Button {
                             store.isLidarrLibraryScope = true
                             store.selectedSourceID = nil
@@ -550,7 +617,7 @@ struct GlobalSearchResultsView: View {
                     }
 
                     Button {
-                        store.searchQuery = ""
+                        store.clearGlobalSearch()
                     } label: {
                         Image(systemName: "xmark")
                             .font(.system(size: 12, weight: .bold))
@@ -644,14 +711,23 @@ struct GlobalSearchResultsView: View {
                     let playlists = store.filteredPlaylists
 
                     if artists.isEmpty && albums.isEmpty && tracks.isEmpty && playlists.isEmpty {
-                        emptySearchCard("No matches in \(store.selectedLibraryDisplayName) for \"\(query)\".")
+                        let emptyMsg: String = {
+                            if !query.isEmpty && store.minStarRating > 0 {
+                                return "No matches in \(store.selectedLibraryDisplayName) for \"\(query)\" rated \(store.minStarRating)+ stars."
+                            } else if store.minStarRating > 0 {
+                                return "No albums or tracks in \(store.selectedLibraryDisplayName) rated at least \(store.minStarRating) star\(store.minStarRating == 1 ? "" : "s") yet."
+                            } else {
+                                return "No matches in \(store.selectedLibraryDisplayName) for \"\(query)\"."
+                            }
+                        }()
+                        emptySearchCard(emptyMsg)
                     } else {
                         if !artists.isEmpty {
                             sectionTitle("ARTISTS (\(artists.count))")
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 155, maximum: 185), spacing: 14)], spacing: 14) {
                                 ForEach(artists.prefix(12)) { artist in
                                     ArtistCardView(artist: artist)
-                                        .simultaneousGesture(TapGesture().onEnded { store.searchQuery = "" })
+                                        .simultaneousGesture(TapGesture().onEnded { store.clearGlobalSearch() })
                                 }
                             }
                         }
@@ -659,9 +735,8 @@ struct GlobalSearchResultsView: View {
                         if !albums.isEmpty {
                             sectionTitle("ALBUMS (\(albums.count))")
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 162, maximum: 192), spacing: 14)], spacing: 14) {
-                                ForEach(albums.prefix(12)) { album in
+                                ForEach(albums.prefix(24)) { album in
                                     AlbumCardView(album: album)
-                                        .simultaneousGesture(TapGesture().onEnded { store.searchQuery = "" })
                                 }
                             }
                         }
@@ -682,7 +757,7 @@ struct GlobalSearchResultsView: View {
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 280), spacing: 12)], spacing: 12) {
                                 ForEach(playlists) { pl in
                                     Button {
-                                        store.searchQuery = ""
+                                        store.clearGlobalSearch()
                                         store.navigate(to: .playlist(pl.id))
                                     } label: {
                                         HStack(spacing: 10) {

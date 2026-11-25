@@ -1102,9 +1102,10 @@ struct PodcastDetailView: View {
                             .foregroundStyle(EchoTheme.textMuted)
                             .padding(.bottom, 4)
 
+                        let totalEpisodes = show.episodes.count
                         LazyVStack(spacing: 6) {
-                            ForEach(show.episodes) { ep in
-                                PodcastEpisodeRowView(episode: ep)
+                            ForEach(Array(show.episodes.enumerated()), id: \.element.id) { idx, ep in
+                                PodcastEpisodeRowView(episode: ep, episodeNumber: totalEpisodes - idx)
                             }
                         }
                     }
@@ -1121,6 +1122,7 @@ struct PodcastDetailView: View {
 struct PodcastEpisodeRowView: View {
     @Environment(EchoStore.self) private var store
     let episode: PodcastEpisode
+    var episodeNumber: Int? = nil
     @State private var isHovered = false
 
     var body: some View {
@@ -1129,6 +1131,15 @@ struct PodcastEpisodeRowView: View {
         let destBadges = store.destinations(forEpisode: episode)
 
         HStack(spacing: 12) {
+            if let episodeNumber {
+                Text(String(format: "%02d", episodeNumber))
+                    .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                    .monospacedDigit()
+                    .foregroundStyle(EchoTheme.textMuted)
+                    .frame(width: 34, alignment: .trailing)
+                    .lineLimit(1)
+            }
+
             Button {
                 store.playEpisode(episode)
             } label: {
