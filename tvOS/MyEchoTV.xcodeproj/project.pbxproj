@@ -1,0 +1,409 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		00F6C43BEEA8EC2B4A767702 /* TVLibraryViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8AB77085ED933E632EE624D /* TVLibraryViews.swift */; };
+		0F9F56CF27B61C73158C78F1 /* MacCatalogClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 249EBB2DB212C8E75F4BCC52 /* MacCatalogClient.swift */; };
+		12AB744096199E1314091BD2 /* TVSharedComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA991FB6357414FCC3C2E665 /* TVSharedComponents.swift */; };
+		1D51DE3FBA1F1F246BBD9D9D /* TVModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6AE577E20ABE8308C786601 /* TVModels.swift */; };
+		3EFBA26F95E5E06B8C69FAA0 /* TVEchoStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89DF1C66122DA6F6E71CEA6B /* TVEchoStore.swift */; };
+		5E0155821465F1677423A042 /* MyEchoTVApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDC08CB1E3A50EE2FD2A8B2A /* MyEchoTVApp.swift */; };
+		5E1B2D5A9C2EF31CA27F1AFE /* TVRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44ACC33F0A5202880346677B /* TVRootView.swift */; };
+		92147ED5F87E89E257CBBDDA /* TVPodcastsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A38BC676E1EA8730AD81CA6 /* TVPodcastsView.swift */; };
+		9D3BAB557FF979BB5ABD691F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1A9163E1492454E5AE4453D2 /* Assets.xcassets */; };
+		9DFD45FE29F8ABB804286001 /* TVMacRemoteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A078A04099001CACE01E7A40 /* TVMacRemoteView.swift */; };
+		9ECED799D6F9D42849503AE6 /* TVServersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D93B61BCF214021B28BC46B /* TVServersView.swift */; };
+		ACD9E365533358218077C14D /* TVAudioPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AB3CC41E349DBFE3A162B /* TVAudioPlayer.swift */; };
+		BF2D2C8574A1318799F6AD21 /* TVPartyModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52520793C3D030F2A72E290A /* TVPartyModeView.swift */; };
+		CCED8B860975EF0E28E4479F /* QRCodeGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DD3E4292BC16963E056A2B6 /* QRCodeGenerator.swift */; };
+		E022427F9327A9A48C7A6DB7 /* TVNowPlayingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42B70575B4B6936AF709CFE4 /* TVNowPlayingView.swift */; };
+		E054955906906B8CBE1F3521 /* TVNavidromeClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DD42C48C123B8C9635FDA63 /* TVNavidromeClient.swift */; };
+		F917B5D1A243C7E5A67DF16B /* TVPodcastService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBFD868E6FC14F243703DFF4 /* TVPodcastService.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		08CC5D0DB4839FD4C905AE56 /* MyEchoTV.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = MyEchoTV.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		0DD3E4292BC16963E056A2B6 /* QRCodeGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCodeGenerator.swift; sourceTree = "<group>"; };
+		0F0AB3CC41E349DBFE3A162B /* TVAudioPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVAudioPlayer.swift; sourceTree = "<group>"; };
+		1A9163E1492454E5AE4453D2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		249EBB2DB212C8E75F4BCC52 /* MacCatalogClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCatalogClient.swift; sourceTree = "<group>"; };
+		2D93B61BCF214021B28BC46B /* TVServersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVServersView.swift; sourceTree = "<group>"; };
+		3DD42C48C123B8C9635FDA63 /* TVNavidromeClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVNavidromeClient.swift; sourceTree = "<group>"; };
+		42B70575B4B6936AF709CFE4 /* TVNowPlayingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVNowPlayingView.swift; sourceTree = "<group>"; };
+		44ACC33F0A5202880346677B /* TVRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVRootView.swift; sourceTree = "<group>"; };
+		52520793C3D030F2A72E290A /* TVPartyModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVPartyModeView.swift; sourceTree = "<group>"; };
+		5A38BC676E1EA8730AD81CA6 /* TVPodcastsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVPodcastsView.swift; sourceTree = "<group>"; };
+		89DF1C66122DA6F6E71CEA6B /* TVEchoStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVEchoStore.swift; sourceTree = "<group>"; };
+		A078A04099001CACE01E7A40 /* TVMacRemoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVMacRemoteView.swift; sourceTree = "<group>"; };
+		AA991FB6357414FCC3C2E665 /* TVSharedComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVSharedComponents.swift; sourceTree = "<group>"; };
+		B6AE577E20ABE8308C786601 /* TVModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVModels.swift; sourceTree = "<group>"; };
+		BDC08CB1E3A50EE2FD2A8B2A /* MyEchoTVApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyEchoTVApp.swift; sourceTree = "<group>"; };
+		CBFD868E6FC14F243703DFF4 /* TVPodcastService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVPodcastService.swift; sourceTree = "<group>"; };
+		F8AB77085ED933E632EE624D /* TVLibraryViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVLibraryViews.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		04BC803C642FB292375F6E5A /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				B6AE577E20ABE8308C786601 /* TVModels.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		217BDAF667A3770F39D50DC5 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				F8AB77085ED933E632EE624D /* TVLibraryViews.swift */,
+				A078A04099001CACE01E7A40 /* TVMacRemoteView.swift */,
+				42B70575B4B6936AF709CFE4 /* TVNowPlayingView.swift */,
+				52520793C3D030F2A72E290A /* TVPartyModeView.swift */,
+				5A38BC676E1EA8730AD81CA6 /* TVPodcastsView.swift */,
+				44ACC33F0A5202880346677B /* TVRootView.swift */,
+				2D93B61BCF214021B28BC46B /* TVServersView.swift */,
+				AA991FB6357414FCC3C2E665 /* TVSharedComponents.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		455921308D64DE0011E4ECFC = {
+			isa = PBXGroup;
+			children = (
+				DDB63F8E8B143E8BD4592305 /* Sources */,
+				DE41C198816125FA7A9B4BFD /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		9C63E793489A8A10729F8DDA /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				249EBB2DB212C8E75F4BCC52 /* MacCatalogClient.swift */,
+				0DD3E4292BC16963E056A2B6 /* QRCodeGenerator.swift */,
+				0F0AB3CC41E349DBFE3A162B /* TVAudioPlayer.swift */,
+				3DD42C48C123B8C9635FDA63 /* TVNavidromeClient.swift */,
+				CBFD868E6FC14F243703DFF4 /* TVPodcastService.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		A0BCCF5AA6F6615B277F7E32 /* State */ = {
+			isa = PBXGroup;
+			children = (
+				89DF1C66122DA6F6E71CEA6B /* TVEchoStore.swift */,
+			);
+			path = State;
+			sourceTree = "<group>";
+		};
+		DDB63F8E8B143E8BD4592305 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				1A9163E1492454E5AE4453D2 /* Assets.xcassets */,
+				BDC08CB1E3A50EE2FD2A8B2A /* MyEchoTVApp.swift */,
+				04BC803C642FB292375F6E5A /* Models */,
+				9C63E793489A8A10729F8DDA /* Services */,
+				A0BCCF5AA6F6615B277F7E32 /* State */,
+				217BDAF667A3770F39D50DC5 /* Views */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		DE41C198816125FA7A9B4BFD /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				08CC5D0DB4839FD4C905AE56 /* MyEchoTV.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		5E7E4586BF32CCA4DF27B944 /* MyEchoTV */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 106E92DD35D964D61FF35923 /* Build configuration list for PBXNativeTarget "MyEchoTV" */;
+			buildPhases = (
+				054F0BA1FFB474DA23FEA2B5 /* Sources */,
+				81C09FE597CA77E3013CBA1A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MyEchoTV;
+			packageProductDependencies = (
+			);
+			productName = MyEchoTV;
+			productReference = 08CC5D0DB4839FD4C905AE56 /* MyEchoTV.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		8AAB9A4010C7C2DAAE381B9C /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					5E7E4586BF32CCA4DF27B944 = {
+						DevelopmentTeam = FGA3Z9LLS2;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 7FD38D84295812098952A725 /* Build configuration list for PBXProject "MyEchoTV" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 455921308D64DE0011E4ECFC;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = DE41C198816125FA7A9B4BFD /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				5E7E4586BF32CCA4DF27B944 /* MyEchoTV */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		81C09FE597CA77E3013CBA1A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9D3BAB557FF979BB5ABD691F /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		054F0BA1FFB474DA23FEA2B5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0F9F56CF27B61C73158C78F1 /* MacCatalogClient.swift in Sources */,
+				5E0155821465F1677423A042 /* MyEchoTVApp.swift in Sources */,
+				CCED8B860975EF0E28E4479F /* QRCodeGenerator.swift in Sources */,
+				ACD9E365533358218077C14D /* TVAudioPlayer.swift in Sources */,
+				3EFBA26F95E5E06B8C69FAA0 /* TVEchoStore.swift in Sources */,
+				00F6C43BEEA8EC2B4A767702 /* TVLibraryViews.swift in Sources */,
+				9DFD45FE29F8ABB804286001 /* TVMacRemoteView.swift in Sources */,
+				1D51DE3FBA1F1F246BBD9D9D /* TVModels.swift in Sources */,
+				E054955906906B8CBE1F3521 /* TVNavidromeClient.swift in Sources */,
+				E022427F9327A9A48C7A6DB7 /* TVNowPlayingView.swift in Sources */,
+				BF2D2C8574A1318799F6AD21 /* TVPartyModeView.swift in Sources */,
+				F917B5D1A243C7E5A67DF16B /* TVPodcastService.swift in Sources */,
+				92147ED5F87E89E257CBBDDA /* TVPodcastsView.swift in Sources */,
+				5E1B2D5A9C2EF31CA27F1AFE /* TVRootView.swift in Sources */,
+				9ECED799D6F9D42849503AE6 /* TVServersView.swift in Sources */,
+				12AB744096199E1314091BD2 /* TVSharedComponents.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		6C6C695E1F0AF6B2D00042EF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = FGA3Z9LLS2;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MARKETING_VERSION = 1.3.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = appletvos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+				TVOS_DEPLOYMENT_TARGET = 17.0;
+			};
+			name = Release;
+		};
+		95644CC4B6F08BB22755628E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = FGA3Z9LLS2;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MARKETING_VERSION = 1.3.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = appletvos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+				TVOS_DEPLOYMENT_TARGET = 17.0;
+			};
+			name = Debug;
+		};
+		9930139FD63F2548424FCC19 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "App Icon & Top Shelf Image";
+				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "My Echo";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.myecho.tvos;
+				PRODUCT_NAME = "My Echo TV";
+				SDKROOT = appletvos;
+				TARGETED_DEVICE_FAMILY = 3;
+			};
+			name = Release;
+		};
+		CE87FFBA4CF7ADB895FF381E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "App Icon & Top Shelf Image";
+				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "My Echo";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.myecho.tvos;
+				PRODUCT_NAME = "My Echo TV";
+				SDKROOT = appletvos;
+				TARGETED_DEVICE_FAMILY = 3;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		106E92DD35D964D61FF35923 /* Build configuration list for PBXNativeTarget "MyEchoTV" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CE87FFBA4CF7ADB895FF381E /* Debug */,
+				9930139FD63F2548424FCC19 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7FD38D84295812098952A725 /* Build configuration list for PBXProject "MyEchoTV" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				95644CC4B6F08BB22755628E /* Debug */,
+				6C6C695E1F0AF6B2D00042EF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 8AAB9A4010C7C2DAAE381B9C /* Project object */;
+}

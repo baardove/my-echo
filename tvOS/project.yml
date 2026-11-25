@@ -1,0 +1,53 @@
+name: MyEchoTV
+options:
+  bundleIdPrefix: com.myecho
+  deploymentTarget:
+    tvOS: "17.0"
+  xcodeVersion: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "1.3.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: "FGA3Z9LLS2"
+    CODE_SIGN_STYLE: Automatic
+schemes:
+  MyEchoTV:
+    build:
+      targets:
+        MyEchoTV: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+targets:
+  MyEchoTV:
+    type: application
+    platform: tvOS
+    sources:
+      - path: Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.myecho.tvos
+        PRODUCT_NAME: My Echo TV
+        ASSETCATALOG_COMPILER_APPICON_NAME: "App Icon & Top Shelf Image"
+        TARGETED_DEVICE_FAMILY: "3"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: My Echo
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: My Echo
+        UIBackgroundModes:
+          - audio
+        NSLocalNetworkUsageDescription: "My Echo discovers your Mac over local Wi-Fi/Ethernet to stream your Hi-Fi music library, podcasts, Party Mode display, and control Mac playback."
+        NSBonjourServices:
+          - _myecho-sync._tcp
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
