@@ -89,6 +89,11 @@ public final class EchoDatabase: @unchecked Sendable {
                 artist_key TEXT PRIMARY KEY,
                 json TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS album_ratings (
+                album_key TEXT PRIMARY KEY,
+                json TEXT NOT NULL
+            );
         """)
     }
 
@@ -322,6 +327,29 @@ public final class EchoDatabase: @unchecked Sendable {
             guard let data = try? encoder.encode(info),
                   let jsonStr = String(data: data, encoding: .utf8) else { return }
             _ = runParamSQL("INSERT OR REPLACE INTO artist_editorial (artist_key, json) VALUES (?, ?);", params: [info.artistKey, jsonStr])
+        }
+    }
+
+    // MARK: - Album User Ratings
+
+    public func loadAllAlbumRatings() -> [String: AlbumUserRating] {
+        queue.sync {
+            let rows = fetchJSONRows(sql: "SELECT json FROM album_ratings;", type: AlbumUserRating.self)
+            return Dictionary(uniqueKeysWithValues: rows.map { ($0.albumKey, $0) })
+        }
+    }
+
+    public func saveAlbumRating(_ rating: AlbumUserRating) {
+        queue.sync {
+            guard let data = try? encoder.encode(rating),
+                  let jsonStr = String(data: data, encoding: .utf8) else { return }
+            _ = runParamSQL("INSERT OR REPLACE INTO album_ratings (album_key, json) VALUES (?, ?);", params: [rating.albumKey, jsonStr])
+        }
+    }
+
+    public func deleteAlbumRating(albumKey: String) {
+        queue.sync {
+            _ = runParamSQL("DELETE FROM album_ratings WHERE album_key = ?;", params: [albumKey])
         }
     }
 

@@ -723,11 +723,13 @@ public enum ArtistNameParser {
     }
 }
 
-/// Persistent per-track listening & online popularity stats (stored independently from re-indexed file metadata)
+/// Persistent per-track listening, rating & online popularity stats (stored independently from re-indexed file metadata)
 public struct TrackStats: Identifiable, Codable, Hashable, Sendable {
     public var trackID: String
     public var userPlayCount: Int
     public var lastPlayedAt: Date?
+    /// Personal 1–5 star rating (nil = unrated)
+    public var userRating: Int?
     /// Normalized 0–100 online popularity score (e.g. from Deezer rank or Last.fm)
     public var onlinePopularity: Int?
     /// Raw global play/rank counter (e.g. Last.fm global plays or Deezer rank score)
@@ -744,6 +746,7 @@ public struct TrackStats: Identifiable, Codable, Hashable, Sendable {
         trackID: String,
         userPlayCount: Int = 0,
         lastPlayedAt: Date? = nil,
+        userRating: Int? = nil,
         onlinePopularity: Int? = nil,
         onlinePlayCount: Int? = nil,
         onlineListeners: Int? = nil,
@@ -753,6 +756,7 @@ public struct TrackStats: Identifiable, Codable, Hashable, Sendable {
         self.trackID = trackID
         self.userPlayCount = userPlayCount
         self.lastPlayedAt = lastPlayedAt
+        self.userRating = userRating.map { max(1, min(5, $0)) }
         self.onlinePopularity = onlinePopularity
         self.onlinePlayCount = onlinePlayCount
         self.onlineListeners = onlineListeners
@@ -775,6 +779,21 @@ public struct TrackStats: Identifiable, Codable, Hashable, Sendable {
         case 1..<20: return 1
         default: return 0
         }
+    }
+}
+
+/// Persistent personal 1–5 star rating for an album (stored independently from re-indexed file metadata)
+public struct AlbumUserRating: Identifiable, Codable, Hashable, Sendable {
+    public var albumKey: String
+    public var rating: Int
+    public var updatedAt: Date
+
+    public var id: String { albumKey }
+
+    public init(albumKey: String, rating: Int, updatedAt: Date = Date()) {
+        self.albumKey = albumKey
+        self.rating = max(1, min(5, rating))
+        self.updatedAt = updatedAt
     }
 }
 
