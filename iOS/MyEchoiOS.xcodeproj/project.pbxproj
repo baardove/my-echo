@@ -1,0 +1,381 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		3D07C8EF499B4C9E504669AF /* iOSAudioPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A36D6E2ED3E7E3BEBA6C809A /* iOSAudioPlayer.swift */; };
+		3F42E38AF4412EF83E251F32 /* iOSViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4464A59EE7275B74AF9488B3 /* iOSViews.swift */; };
+		3FFB1FD2F43AB874973FA821 /* iOSEchoStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30DA447C6C0591A7A78F8B7 /* iOSEchoStore.swift */; };
+		73B82AE1B923500A8A9F5E49 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EF34E912AD942A9A15F81C17 /* Assets.xcassets */; };
+		82DB9282B6AF973C9DBD1BFB /* WiFiSyncManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90003DB05FBB6DB08D840FDB /* WiFiSyncManager.swift */; };
+		C91B4FFA955D23F9E1D709A1 /* iOSPodcastManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56FC05C8A2E6A086BC313052 /* iOSPodcastManager.swift */; };
+		F00C05FBDD5146453AC10876 /* NavidromeClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = E24E11D2683F2B08DB5565C6 /* NavidromeClient.swift */; };
+		F36C79EC1DD24B0393E8AA6B /* MyEchoiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAE101B3ED04D178D7DB6F99 /* MyEchoiOSApp.swift */; };
+		FE51CB22DFE2C1837FE97A79 /* iOSModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9557485246A94F308C1BE61 /* iOSModels.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		4464A59EE7275B74AF9488B3 /* iOSViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSViews.swift; sourceTree = "<group>"; };
+		4D82C69687C930C5A9CA8301 /* MyEchoiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = MyEchoiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		56FC05C8A2E6A086BC313052 /* iOSPodcastManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSPodcastManager.swift; sourceTree = "<group>"; };
+		90003DB05FBB6DB08D840FDB /* WiFiSyncManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WiFiSyncManager.swift; sourceTree = "<group>"; };
+		A36D6E2ED3E7E3BEBA6C809A /* iOSAudioPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSAudioPlayer.swift; sourceTree = "<group>"; };
+		A9557485246A94F308C1BE61 /* iOSModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSModels.swift; sourceTree = "<group>"; };
+		C30DA447C6C0591A7A78F8B7 /* iOSEchoStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSEchoStore.swift; sourceTree = "<group>"; };
+		CAE101B3ED04D178D7DB6F99 /* MyEchoiOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyEchoiOSApp.swift; sourceTree = "<group>"; };
+		E24E11D2683F2B08DB5565C6 /* NavidromeClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavidromeClient.swift; sourceTree = "<group>"; };
+		EF34E912AD942A9A15F81C17 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		06A1ED5AAD4A8532B283417E /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				EF34E912AD942A9A15F81C17 /* Assets.xcassets */,
+				CAE101B3ED04D178D7DB6F99 /* MyEchoiOSApp.swift */,
+				2347DBE777905F86AF0C086A /* Models */,
+				4B00105573C80139F485486C /* Services */,
+				0D4F9E2E9CA62E90F8BCE70B /* State */,
+				EF03050B62B8EF092E4A12A0 /* Views */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		0D4F9E2E9CA62E90F8BCE70B /* State */ = {
+			isa = PBXGroup;
+			children = (
+				C30DA447C6C0591A7A78F8B7 /* iOSEchoStore.swift */,
+			);
+			path = State;
+			sourceTree = "<group>";
+		};
+		2347DBE777905F86AF0C086A /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				A9557485246A94F308C1BE61 /* iOSModels.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		4B00105573C80139F485486C /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				A36D6E2ED3E7E3BEBA6C809A /* iOSAudioPlayer.swift */,
+				56FC05C8A2E6A086BC313052 /* iOSPodcastManager.swift */,
+				E24E11D2683F2B08DB5565C6 /* NavidromeClient.swift */,
+				90003DB05FBB6DB08D840FDB /* WiFiSyncManager.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		9AE07B212A87271F5734CE49 = {
+			isa = PBXGroup;
+			children = (
+				06A1ED5AAD4A8532B283417E /* Sources */,
+				CF61B6BF538E5E40700B9F3D /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		CF61B6BF538E5E40700B9F3D /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				4D82C69687C930C5A9CA8301 /* MyEchoiOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		EF03050B62B8EF092E4A12A0 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				4464A59EE7275B74AF9488B3 /* iOSViews.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		FE6E8D1EDC426562FEF6DE0A /* MyEchoiOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E685BDBAC1EBAF1CB24F7D1A /* Build configuration list for PBXNativeTarget "MyEchoiOS" */;
+			buildPhases = (
+				747541BD74366C973CAC74AD /* Sources */,
+				A1D0256082521ECACF03DC18 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MyEchoiOS;
+			packageProductDependencies = (
+			);
+			productName = MyEchoiOS;
+			productReference = 4D82C69687C930C5A9CA8301 /* MyEchoiOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		BFEAF567008F1E82171D270F /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					FE6E8D1EDC426562FEF6DE0A = {
+						DevelopmentTeam = FGA3Z9LLS2;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 2859228017D47688ADEAA925 /* Build configuration list for PBXProject "MyEchoiOS" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 9AE07B212A87271F5734CE49;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = CF61B6BF538E5E40700B9F3D /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				FE6E8D1EDC426562FEF6DE0A /* MyEchoiOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A1D0256082521ECACF03DC18 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				73B82AE1B923500A8A9F5E49 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		747541BD74366C973CAC74AD /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F36C79EC1DD24B0393E8AA6B /* MyEchoiOSApp.swift in Sources */,
+				F00C05FBDD5146453AC10876 /* NavidromeClient.swift in Sources */,
+				82DB9282B6AF973C9DBD1BFB /* WiFiSyncManager.swift in Sources */,
+				3D07C8EF499B4C9E504669AF /* iOSAudioPlayer.swift in Sources */,
+				3FFB1FD2F43AB874973FA821 /* iOSEchoStore.swift in Sources */,
+				FE51CB22DFE2C1837FE97A79 /* iOSModels.swift in Sources */,
+				C91B4FFA955D23F9E1D709A1 /* iOSPodcastManager.swift in Sources */,
+				3F42E38AF4412EF83E251F32 /* iOSViews.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		254DE80978CAACAFBB68EE34 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = FGA3Z9LLS2;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.3.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		733F116E00D13CDC79969F4F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = FGA3Z9LLS2;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.3.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		D47BD29A8219AC0F03BAD7CC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "My Echo";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.myecho.ios;
+				PRODUCT_NAME = "My Echo";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		FB3BB0E2A38471462AE54325 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "My Echo";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.myecho.ios;
+				PRODUCT_NAME = "My Echo";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		2859228017D47688ADEAA925 /* Build configuration list for PBXProject "MyEchoiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				733F116E00D13CDC79969F4F /* Debug */,
+				254DE80978CAACAFBB68EE34 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E685BDBAC1EBAF1CB24F7D1A /* Build configuration list for PBXNativeTarget "MyEchoiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D47BD29A8219AC0F03BAD7CC /* Debug */,
+				FB3BB0E2A38471462AE54325 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = BFEAF567008F1E82171D270F /* Project object */;
+}
