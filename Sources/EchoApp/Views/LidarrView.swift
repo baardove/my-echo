@@ -350,8 +350,8 @@ struct LidarrView: View {
                             if store.lidarrAlbumResults.isEmpty {
                                 emptySearchHint(
                                     icon: "opticaldisc",
-                                    title: "Search Albums to Order",
-                                    detail: "Type an album or artist name (e.g. \"Pink Floyd Dark Side\" or \"Daft Punk Random Access Memories\") to look it up in Lidarr and order a download in one click."
+                                    title: "Find Albums to Order",
+                                    detail: "Type an artist name (e.g. \"Michael Jackson\") or album title (e.g. \"Bad\") — Albums selects the output, showing matching albums and artist discographies ready to order in Lidarr."
                                 )
                             } else {
                                 ForEach(store.lidarrAlbumResults) { album in
@@ -362,8 +362,8 @@ struct LidarrView: View {
                             if store.lidarrTrackResults.isEmpty {
                                 emptySearchHint(
                                     icon: "music.note",
-                                    title: "Search by Song / Track Name",
-                                    detail: "Lidarr downloads full albums. Type any song title and My Echo finds the track's album so you can mark it or order it into Lidarr in one click."
+                                    title: "Find Tracks to Order Parent Albums",
+                                    detail: "Type a song title, artist name, or album — Tracks selects the output, returning matching tracks so you can order their parent albums in Lidarr in one click."
                                 )
                             } else {
                                 ForEach(store.lidarrTrackResults) { track in
@@ -393,8 +393,8 @@ struct LidarrView: View {
 
     private var searchPlaceholder: String {
         switch store.lidarrSearchMode {
-        case .albums: return "Search albums in Lidarr (artist or album title)..."
-        case .tracks: return "Search a song title to find & order its album in Lidarr..."
+        case .albums: return "Search by artist or album name to show albums..."
+        case .tracks: return "Search by track, artist, or album name to show tracks..."
         case .artists: return "Search artists in Lidarr..."
         }
     }

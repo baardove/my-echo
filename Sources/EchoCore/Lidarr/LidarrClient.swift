@@ -597,8 +597,61 @@ public actor LidarrClient {
     }
 
     // MARK: - Search (Albums, Artists, Tracks)
+    // Note: Albums / Tracks / Artists select the OUTPUT type, not the input field:
+    // - searchAlbums accepts an album title OR an artist name (returning matching albums + artist discography)
+    // - searchTracksForAlbumOrder accepts a track title, artist name, OR album title (returning matching tracks)
 
     public func searchAlbums(term: String, config: LidarrConfig) async throws -> [LidarrAlbumSearchResult] {
+        let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
+        // 1. Query Lidarr album lookup & artist lookup in parallel
+        async let directAlbumsTask = lookupAlbumsRaw(term: trimmed, config: config)
+        async let artistsTask = searchArtistsSafe(term: trimmed, config: config)
+
+        let directAlbums = try await directAlbumsTask
+        let artists = await artistsTask
+
+        // 2. If the query matches one or more artists, expand their discographies into album results
+        let strongArtists = Self.selectMatchingArtists(from: artists, query: trimmed)
+        var artistDiscographyAlbums: [LidarrAlbumSearchResult] = []
+        let matchedArtistNames = strongArtists.map(\.artistName)
+
+        if !strongArtists.isEmpty {
+            for artist in strongArtists.prefix(2) {
+                // Path A: Artist is already in Lidarr -> fetch all albums directly from Lidarr DB
+                if let artistID = artist.lidarrID, artistID > 0 {
+                    if let localAlbums = try? await fetchAlbumsForLidarrArtist(artistID: artistID, artistName: artist.artistName, config: config),
+                       !localAlbums.isEmpty {
+                        artistDiscographyAlbums.append(contentsOf: localAlbums)
+                        continue
+                    }
+                }
+
+                // Path B: Artist not yet in Lidarr -> resolve discography via MusicBrainz (exact MBID) + Deezer (cover art & popularity)
+                let remoteAlbums = await fetchRemoteDiscographyAlbums(for: artist)
+                artistDiscographyAlbums.append(contentsOf: remoteAlbums)
+            }
+        } else if directAlbums.count < 5 {
+            // Fallback: if Lidarr didn't return an artist match, still check Deezer artist discography
+            let fallbackAlbums = await fetchDeezerArtistDiscography(artistName: trimmed)
+            artistDiscographyAlbums.append(contentsOf: fallbackAlbums)
+        }
+
+        return Self.mergeAndRankAlbumResults(
+            query: trimmed,
+            directAlbums: directAlbums,
+            artistAlbums: artistDiscographyAlbums,
+            matchedArtistNames: matchedArtistNames
+        )
+    }
+
+    private func searchArtistsSafe(term: String, config: LidarrConfig) async -> [LidarrArtistSearchResult] {
+        (try? await searchArtists(term: term, config: config)) ?? []
+    }
+
+    /// Direct low-level Lidarr `/api/v1/album/lookup` (used when resolving a specific album payload for ordering).
+    private func lookupAlbumsRaw(term: String, config: LidarrConfig) async throws -> [LidarrAlbumSearchResult] {
         let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
         let data = try await request(
@@ -607,6 +660,309 @@ public actor LidarrClient {
             config: config
         )
         return parseAlbumLookupArray(data: data, baseURL: Self.normalizeBaseURL(config.baseURL))
+    }
+
+    private func fetchAlbumsForLidarrArtist(artistID: Int, artistName: String, config: LidarrConfig) async throws -> [LidarrAlbumSearchResult] {
+        let data = try await request(
+            path: "/api/v1/album",
+            queryItems: [
+                URLQueryItem(name: "artistId", value: String(artistID)),
+                URLQueryItem(name: "includeAllArtistAlbums", value: "true")
+            ],
+            config: config
+        )
+        let baseURL = Self.normalizeBaseURL(config.baseURL)
+        return parseAlbumLookupArray(data: data, baseURL: baseURL).map { alb in
+            var copy = alb
+            if copy.artistName == "Unknown Artist" || copy.artistName.isEmpty {
+                copy.artistName = artistName
+            }
+            return copy
+        }
+    }
+
+    private func fetchRemoteDiscographyAlbums(for artist: LidarrArtistSearchResult) async -> [LidarrAlbumSearchResult] {
+        async let deezerTask = fetchDeezerArtistDiscography(artistName: artist.artistName)
+        async let mbTask = fetchMusicBrainzReleaseGroups(foreignArtistId: artist.foreignArtistId, artistName: artist.artistName)
+
+        let deezerAlbums = await deezerTask
+        let mbAlbums = await mbTask
+
+        if mbAlbums.isEmpty {
+            return deezerAlbums
+        }
+
+        // Enrich MusicBrainz albums (which carry exact Lidarr foreignAlbumIds) with Deezer cover art when available
+        var deezerCoverByNormTitle: [String: String] = [:]
+        for d in deezerAlbums {
+            let key = OnlinePopularityService.normalizeTitleForMatching(d.title)
+            if let cover = d.coverURL, !cover.isEmpty, deezerCoverByNormTitle[key] == nil {
+                deezerCoverByNormTitle[key] = cover
+            }
+        }
+
+        var enriched = mbAlbums.map { alb -> LidarrAlbumSearchResult in
+            var copy = alb
+            let key = OnlinePopularityService.normalizeTitleForMatching(copy.title)
+            if copy.coverURL == nil, let cover = deezerCoverByNormTitle[key] {
+                copy.coverURL = cover
+            }
+            return copy
+        }
+
+        // Append any Deezer albums not already represented in MusicBrainz results
+        let seenTitles = Set(enriched.map { OnlinePopularityService.normalizeTitleForMatching($0.title) })
+        for d in deezerAlbums {
+            let key = OnlinePopularityService.normalizeTitleForMatching(d.title)
+            if !key.isEmpty && !seenTitles.contains(key) {
+                enriched.append(d)
+            }
+        }
+        return enriched
+    }
+
+    private func fetchMusicBrainzReleaseGroups(foreignArtistId: String, artistName: String) async -> [LidarrAlbumSearchResult] {
+        guard !foreignArtistId.isEmpty,
+              let encoded = foreignArtistId.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://musicbrainz.org/ws/2/release-group?artist=\(encoded)&type=album%7Cep&fmt=json&limit=40") else {
+            return []
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        req.setValue("MyEcho/1.3 (https://github.com/myecho)", forHTTPHeaderField: "User-Agent")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        guard let (data, resp) = try? await session.data(for: req),
+              let http = resp as? HTTPURLResponse,
+              (200...299).contains(http.statusCode) else {
+            return []
+        }
+
+        struct MBResponse: Decodable {
+            let releaseGroups: [MBReleaseGroup]
+            enum CodingKeys: String, CodingKey {
+                case releaseGroups = "release-groups"
+            }
+        }
+        struct MBReleaseGroup: Decodable {
+            let id: String
+            let title: String
+            let primaryType: String?
+            let secondaryTypes: [String]?
+            let firstReleaseDate: String?
+            enum CodingKeys: String, CodingKey {
+                case id, title
+                case primaryType = "primary-type"
+                case secondaryTypes = "secondary-types"
+                case firstReleaseDate = "first-release-date"
+            }
+        }
+
+        guard let decoded = try? JSONDecoder().decode(MBResponse.self, from: data) else { return [] }
+        return decoded.releaseGroups.compactMap { rg in
+            // Skip noisy unofficial/bootleg/compilation-heavy secondary types unless studio album/EP
+            let secondaries = Set((rg.secondaryTypes ?? []).map { $0.lowercased() })
+            if secondaries.contains("bootleg") || secondaries.contains("interview") || secondaries.contains("audiobook") {
+                return nil
+            }
+            let year: Int? = rg.firstReleaseDate.flatMap { str in
+                str.count >= 4 ? Int(str.prefix(4)) : nil
+            }
+            let typeLabel = secondaries.contains("compilation")
+                ? "Compilation"
+                : (secondaries.contains("live") ? "Live" : (rg.primaryType ?? "Album"))
+            return LidarrAlbumSearchResult(
+                lidarrID: nil,
+                foreignAlbumId: rg.id,
+                title: rg.title,
+                artistName: artistName,
+                foreignArtistId: foreignArtistId,
+                releaseYear: year,
+                releaseDate: rg.firstReleaseDate,
+                albumType: typeLabel,
+                coverURL: "https://coverartarchive.org/release-group/\(rg.id)/front-250",
+                monitored: false,
+                rawJSONData: Data()
+            )
+        }
+    }
+
+    private func fetchDeezerArtistDiscography(artistName: String) async -> [LidarrAlbumSearchResult] {
+        guard let artist = await findMatchingDeezerArtist(term: artistName) else { return [] }
+        guard let url = URL(string: "https://api.deezer.com/artist/\(artist.id)/albums?limit=35") else { return [] }
+        guard let (data, _) = try? await session.data(from: url) else { return [] }
+
+        struct DZAlbumResp: Decodable { let data: [DZArtistAlbum] }
+        struct DZArtistAlbum: Decodable {
+            let id: Int
+            let title: String
+            let cover_medium: String?
+            let cover_big: String?
+            let release_date: String?
+            let record_type: String?
+        }
+
+        guard let decoded = try? JSONDecoder().decode(DZAlbumResp.self, from: data) else { return [] }
+        return decoded.data.map { item in
+            let year = item.release_date.flatMap { $0.count >= 4 ? Int($0.prefix(4)) : nil }
+            let typeLabel: String
+            switch item.record_type?.lowercased() {
+            case "album": typeLabel = "Album"
+            case "ep": typeLabel = "EP"
+            case "single": typeLabel = "Single"
+            case "compile": typeLabel = "Compilation"
+            default: typeLabel = "Album"
+            }
+            return LidarrAlbumSearchResult(
+                lidarrID: nil,
+                foreignAlbumId: "deezer-album:\(item.id)",
+                title: item.title,
+                artistName: artist.name,
+                foreignArtistId: nil,
+                releaseYear: year,
+                releaseDate: item.release_date,
+                albumType: typeLabel,
+                coverURL: item.cover_big ?? item.cover_medium,
+                monitored: false,
+                rawJSONData: Data()
+            )
+        }
+    }
+
+    private struct DeezerArtistHit: Decodable {
+        let id: Int
+        let name: String
+    }
+
+    private func findMatchingDeezerArtist(term: String) async -> DeezerArtistHit? {
+        let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://api.deezer.com/search/artist?q=\(encoded)&limit=5") else {
+            return nil
+        }
+        struct DZArtistsResp: Decodable { let data: [DeezerArtistHit] }
+        guard let (data, _) = try? await session.data(from: url),
+              let decoded = try? JSONDecoder().decode(DZArtistsResp.self, from: data) else {
+            return nil
+        }
+        let normQ = OnlinePopularityService.normalizeTitleForMatching(trimmed)
+        guard !normQ.isEmpty else { return nil }
+        return decoded.data.first(where: { hit in
+            let normName = OnlinePopularityService.normalizeTitleForMatching(hit.name)
+            return normName == normQ
+                || normName.hasPrefix(normQ)
+                || normQ.hasPrefix(normName)
+                || normName.contains(normQ)
+        })
+    }
+
+    public static func selectMatchingArtists(from artists: [LidarrArtistSearchResult], query: String) -> [LidarrArtistSearchResult] {
+        let normQ = OnlinePopularityService.normalizeTitleForMatching(query)
+        guard !normQ.isEmpty else { return [] }
+        let queryTokens = normQ.split(separator: " ").map(String.init)
+        return artists.filter { artist in
+            let normName = OnlinePopularityService.normalizeTitleForMatching(artist.artistName)
+            guard !normName.isEmpty else { return false }
+            if normName == normQ || normName.hasPrefix(normQ) || normQ.hasPrefix(normName) {
+                return true
+            }
+            if normQ.count >= 3 && normName.contains(normQ) {
+                return true
+            }
+            if queryTokens.count >= 2 && queryTokens.allSatisfy({ normName.contains($0) }) {
+                return true
+            }
+            return false
+        }
+    }
+
+    public static func mergeAndRankAlbumResults(
+        query: String,
+        directAlbums: [LidarrAlbumSearchResult],
+        artistAlbums: [LidarrAlbumSearchResult],
+        matchedArtistNames: [String] = []
+    ) -> [LidarrAlbumSearchResult] {
+        let normQ = OnlinePopularityService.normalizeTitleForMatching(query)
+        let normMatchedArtists = Set(matchedArtistNames.map { OnlinePopularityService.normalizeTitleForMatching($0) }.filter { !$0.isEmpty })
+
+        // Deduplicate: prefer entries with real Lidarr metadata (isInLidarr or non-empty rawJSONData)
+        var byKey: [String: LidarrAlbumSearchResult] = [:]
+        var orderedKeys: [String] = []
+
+        func ingest(_ item: LidarrAlbumSearchResult) {
+            let normTitle = OnlinePopularityService.normalizeTitleForMatching(item.title)
+            let normArtist = OnlinePopularityService.normalizeTitleForMatching(item.artistName)
+            let key = normTitle.isEmpty ? item.foreignAlbumId.lowercased() : "\(normArtist)::\(normTitle)"
+
+            if let existing = byKey[key] {
+                let existingRichness = (existing.isInLidarr ? 4 : 0) + (!existing.rawJSONData.isEmpty ? 2 : 0) + (existing.coverURL != nil ? 1 : 0)
+                let newRichness = (item.isInLidarr ? 4 : 0) + (!item.rawJSONData.isEmpty ? 2 : 0) + (item.coverURL != nil ? 1 : 0)
+                if newRichness > existingRichness {
+                    var merged = item
+                    if merged.coverURL == nil { merged.coverURL = existing.coverURL }
+                    if merged.releaseYear == nil { merged.releaseYear = existing.releaseYear }
+                    byKey[key] = merged
+                } else if existing.coverURL == nil, let cover = item.coverURL {
+                    var updated = existing
+                    updated.coverURL = cover
+                    byKey[key] = updated
+                }
+            } else {
+                byKey[key] = item
+                orderedKeys.append(key)
+            }
+        }
+
+        for a in directAlbums { ingest(a) }
+        for a in artistAlbums { ingest(a) }
+
+        func score(_ alb: LidarrAlbumSearchResult) -> Int {
+            let normTitle = OnlinePopularityService.normalizeTitleForMatching(alb.title)
+            let normArtist = OnlinePopularityService.normalizeTitleForMatching(alb.artistName)
+            let typeLower = (alb.albumType ?? "").lowercased()
+            let isStudioAlbum = typeLower.isEmpty || typeLower == "album"
+            let isSingle = typeLower == "single"
+            let isCompilation = typeLower == "compilation" || typeLower == "live"
+
+            var s = 0
+            // Exact or strong artist match (e.g. searching "Michael Jackson" -> albums by Michael Jackson)
+            if normArtist == normQ || normMatchedArtists.contains(normArtist) {
+                s += 900
+            } else if !normQ.isEmpty && (normArtist.hasPrefix(normQ) || normArtist.contains(normQ)) {
+                s += 650
+            }
+
+            // Album title match
+            if normTitle == normQ {
+                s += 1000
+            } else if !normQ.isEmpty && normTitle.hasPrefix(normQ) {
+                s += 720
+            } else if !normQ.isEmpty && normTitle.contains(normQ) {
+                s += 520
+            }
+
+            // Prefer full studio albums over singles & compilations
+            if isStudioAlbum { s += 160 }
+            else if isCompilation { s += 40 }
+            else if isSingle { s -= 120 }
+
+            if alb.isInLidarr { s += 30 }
+            if !alb.rawJSONData.isEmpty { s += 15 }
+            return s
+        }
+
+        let merged = orderedKeys.compactMap { byKey[$0] }
+        return merged.sorted { a, b in
+            let sa = score(a)
+            let sb = score(b)
+            if sa != sb { return sa > sb }
+            // Within same tier (e.g., studio albums by the same artist), sort chronologically newest or oldest cleanly -> releaseYear ascending/descending (newest first)
+            let ya = a.releaseYear ?? 0
+            let yb = b.releaseYear ?? 0
+            if ya != yb { return ya > yb }
+            return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
+        }
     }
 
     public func searchArtists(term: String, config: LidarrConfig) async throws -> [LidarrArtistSearchResult] {
@@ -620,27 +976,24 @@ public actor LidarrClient {
         return parseArtistLookupArray(data: data, baseURL: Self.normalizeBaseURL(config.baseURL))
     }
 
-    /// Resolves song/track queries to their album + artist via Deezer public catalog,
-    /// allowing users to search by track title and immediately order the album in Lidarr.
+    /// Resolves track, artist, or album queries into matching tracks (output = Tracks) via Deezer public catalog,
+    /// allowing users to search by artist name, album title, or song title and order the parent album in Lidarr.
     public func searchTracksForAlbumOrder(term: String) async throws -> [LidarrTrackMatch] {
         let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "https://api.deezer.com/search?q=\(encoded)&limit=20") else {
+              let searchURL = URL(string: "https://api.deezer.com/search/track?q=\(encoded)&limit=30") else {
             return []
         }
-        let (data, _) = try await session.data(from: url)
 
-        struct DZResp: Decodable {
-            let data: [DZTrack]
-        }
+        struct DZResp: Decodable { let data: [DZTrack] }
         struct DZTrack: Decodable {
             let id: Int
             let title: String
             let duration: Int
             let rank: Int?
             let artist: DZArtist
-            let album: DZAlbum
+            let album: DZAlbum?
         }
         struct DZArtist: Decodable { let name: String }
         struct DZAlbum: Decodable {
@@ -648,31 +1001,190 @@ public actor LidarrClient {
             let cover_medium: String?
             let cover_big: String?
         }
+        struct DZAlbumHit: Decodable {
+            let id: Int
+            let title: String
+            let cover_medium: String?
+            let cover_big: String?
+            let artist: DZArtist?
+        }
+        struct DZAlbumSearchResp: Decodable { let data: [DZAlbumHit] }
 
-        let decoded = try JSONDecoder().decode(DZResp.self, from: data)
-        return decoded.data.map { item in
+        func mapTrack(_ item: DZTrack, fallbackAlbum: String = "", fallbackCover: String? = nil) -> LidarrTrackMatch {
             LidarrTrackMatch(
                 id: String(item.id),
                 title: item.title,
                 artistName: item.artist.name,
-                albumTitle: item.album.title,
+                albumTitle: item.album?.title ?? fallbackAlbum,
                 duration: item.duration,
-                coverURL: item.album.cover_big ?? item.album.cover_medium,
+                coverURL: item.album?.cover_big ?? item.album?.cover_medium ?? fallbackCover,
                 popularity: item.rank.map { OnlinePopularityService.scoreFromDeezerRank($0) }
             )
         }
+
+        // Run direct track search, artist top-tracks lookup, and album tracks lookup in parallel
+        async let directTracksTask: [LidarrTrackMatch] = {
+            let (data, _) = try await self.session.data(from: searchURL)
+            let decoded = try JSONDecoder().decode(DZResp.self, from: data)
+            return decoded.data.map { mapTrack($0) }
+        }()
+
+        async let artistTopTask: (artistName: String?, tracks: [LidarrTrackMatch]) = {
+            guard let artist = await self.findMatchingDeezerArtist(term: trimmed),
+                  let topURL = URL(string: "https://api.deezer.com/artist/\(artist.id)/top?limit=30"),
+                  let (data, _) = try? await self.session.data(from: topURL),
+                  let decoded = try? JSONDecoder().decode(DZResp.self, from: data) else {
+                return (nil, [])
+            }
+            return (artist.name, decoded.data.map { mapTrack($0) })
+        }()
+
+        async let albumTracksTask: [LidarrTrackMatch] = {
+            guard let albSearchURL = URL(string: "https://api.deezer.com/search/album?q=\(encoded)&limit=3"),
+                  let (sData, _) = try? await self.session.data(from: albSearchURL),
+                  let sDecoded = try? JSONDecoder().decode(DZAlbumSearchResp.self, from: sData) else {
+                return []
+            }
+            let normQ = OnlinePopularityService.normalizeTitleForMatching(trimmed)
+            guard let hit = sDecoded.data.first(where: { h in
+                let nt = OnlinePopularityService.normalizeTitleForMatching(h.title)
+                return nt == normQ || nt.hasPrefix(normQ)
+            }) else {
+                return []
+            }
+            guard let tracksURL = URL(string: "https://api.deezer.com/album/\(hit.id)/tracks?limit=25"),
+                  let (tData, _) = try? await self.session.data(from: tracksURL),
+                  let tDecoded = try? JSONDecoder().decode(DZResp.self, from: tData) else {
+                return []
+            }
+            let fallbackCover = hit.cover_big ?? hit.cover_medium
+            return tDecoded.data.map { mapTrack($0, fallbackAlbum: hit.title, fallbackCover: fallbackCover) }
+        }()
+
+        let directTracks = try await directTracksTask
+        let artistRes = await artistTopTask
+        let albumTracks = await albumTracksTask
+
+        return Self.mergeAndRankTrackResults(
+            query: trimmed,
+            directTracks: directTracks,
+            artistTopTracks: artistRes.tracks,
+            albumTracks: albumTracks,
+            matchedArtistName: artistRes.artistName
+        )
+    }
+
+    public static func mergeAndRankTrackResults(
+        query: String,
+        directTracks: [LidarrTrackMatch],
+        artistTopTracks: [LidarrTrackMatch],
+        albumTracks: [LidarrTrackMatch],
+        matchedArtistName: String? = nil
+    ) -> [LidarrTrackMatch] {
+        let normQ = OnlinePopularityService.normalizeTitleForMatching(query)
+        let normMatchedArtist = matchedArtistName.map { OnlinePopularityService.normalizeTitleForMatching($0) } ?? ""
+        let queryIsExactArtist = !normMatchedArtist.isEmpty && (normMatchedArtist == normQ || normMatchedArtist.hasPrefix(normQ))
+
+        var seenIDs = Set<String>()
+        var seenArtistTitle = Set<String>()
+        var combined: [LidarrTrackMatch] = []
+
+        func ingest(_ list: [LidarrTrackMatch]) {
+            for t in list {
+                let dedupKey = "\(OnlinePopularityService.normalizeTitleForMatching(t.artistName))::\(OnlinePopularityService.normalizeTitleForMatching(t.title))"
+                guard seenIDs.insert(t.id).inserted else { continue }
+                guard seenArtistTitle.insert(dedupKey).inserted else { continue }
+                combined.append(t)
+            }
+        }
+
+        // If user searched an artist name, artist top tracks are the cleanest primary results;
+        // otherwise lead with direct track matches, then album tracks, then artist top tracks.
+        if queryIsExactArtist {
+            ingest(artistTopTracks)
+            ingest(directTracks)
+            ingest(albumTracks)
+        } else {
+            ingest(directTracks)
+            ingest(albumTracks)
+            ingest(artistTopTracks)
+        }
+
+        func score(_ t: LidarrTrackMatch) -> Int {
+            let nt = OnlinePopularityService.normalizeTitleForMatching(t.title)
+            let na = OnlinePopularityService.normalizeTitleForMatching(t.artistName)
+            let nal = OnlinePopularityService.normalizeTitleForMatching(t.albumTitle)
+            var s = (t.popularity ?? 0)
+
+            if queryIsExactArtist && (na == normMatchedArtist || na.contains(normMatchedArtist)) {
+                s += 900
+            } else if na == normQ {
+                s += 850
+            } else if !normQ.isEmpty && na.contains(normQ) {
+                s += 500
+            }
+
+            if nt == normQ {
+                s += 950
+            } else if !normQ.isEmpty && nt.hasPrefix(normQ) {
+                s += 700
+            } else if !normQ.isEmpty && nt.contains(normQ) {
+                s += 520
+            }
+
+            if nal == normQ {
+                s += 620
+            } else if !normQ.isEmpty && nal.contains(normQ) {
+                s += 320
+            }
+            return s
+        }
+
+        return Array(
+            combined.sorted { a, b in
+                let sa = score(a)
+                let sb = score(b)
+                if sa != sb { return sa > sb }
+                return (a.popularity ?? 0) > (b.popularity ?? 0)
+            }.prefix(40)
+        )
     }
 
     // MARK: - Ordering Downloads
 
     public func orderAlbum(_ album: LidarrAlbumSearchResult, config: LidarrConfig) async throws -> LidarrOrderResult {
+        // 0. If this album came from artist-discography expansion without raw Lidarr lookup JSON,
+        // resolve the full Lidarr lookup object on-demand before adding!
+        var resolvedAlbum = album
+        if resolvedAlbum.lidarrID == nil && resolvedAlbum.rawJSONData.isEmpty {
+            let isMBID = !resolvedAlbum.foreignAlbumId.hasPrefix("deezer-album:")
+                && UUID(uuidString: resolvedAlbum.foreignAlbumId) != nil
+            if isMBID,
+               let byID = try? await lookupAlbumsRaw(term: "lidarr:\(resolvedAlbum.foreignAlbumId)", config: config),
+               let exact = byID.first(where: { $0.foreignAlbumId.caseInsensitiveCompare(resolvedAlbum.foreignAlbumId) == .orderedSame }) ?? byID.first {
+                resolvedAlbum = exact
+            } else {
+                let candidates = try await lookupAlbumsRaw(term: "\(resolvedAlbum.artistName) \(resolvedAlbum.title)", config: config)
+                let targetTitle = OnlinePopularityService.normalizeTitleForMatching(resolvedAlbum.title)
+                let targetArtist = OnlinePopularityService.normalizeTitleForMatching(resolvedAlbum.artistName)
+                if let best = candidates.first(where: { c in
+                    let ct = OnlinePopularityService.normalizeTitleForMatching(c.title)
+                    let ca = OnlinePopularityService.normalizeTitleForMatching(c.artistName)
+                    return (ct == targetTitle || ct.contains(targetTitle) || targetTitle.contains(ct))
+                        && (ca.contains(targetArtist) || targetArtist.contains(ca))
+                }) ?? candidates.first {
+                    resolvedAlbum = best
+                }
+            }
+        }
+
         // 1. If already tracked in Lidarr, monitor & trigger AlbumSearch directly
-        if let existingID = album.lidarrID, existingID > 0 {
+        if let existingID = resolvedAlbum.lidarrID, existingID > 0 {
             try await monitorAlbum(albumID: existingID, monitored: true, config: config)
             try await triggerAlbumSearch(albumID: existingID, config: config)
             return LidarrOrderResult(
-                albumTitle: album.title,
-                artistName: album.artistName,
+                albumTitle: resolvedAlbum.title,
+                artistName: resolvedAlbum.artistName,
                 lidarrAlbumID: existingID,
                 alreadyExisted: true,
                 searchTriggered: true
@@ -680,9 +1192,10 @@ public actor LidarrClient {
         }
 
         // 2. Check if foreignAlbumId is already in Lidarr (e.g. added since lookup)
-        if let existingData = try? await request(
+        if !resolvedAlbum.foreignAlbumId.hasPrefix("deezer-album:"),
+           let existingData = try? await request(
             path: "/api/v1/album",
-            queryItems: [URLQueryItem(name: "foreignAlbumId", value: album.foreignAlbumId)],
+            queryItems: [URLQueryItem(name: "foreignAlbumId", value: resolvedAlbum.foreignAlbumId)],
             config: config
         ),
            let existingArr = try? JSONSerialization.jsonObject(with: existingData) as? [[String: Any]],
@@ -691,8 +1204,8 @@ public actor LidarrClient {
             try await monitorAlbum(albumID: existingID, monitored: true, config: config)
             try await triggerAlbumSearch(albumID: existingID, config: config)
             return LidarrOrderResult(
-                albumTitle: album.title,
-                artistName: album.artistName,
+                albumTitle: resolvedAlbum.title,
+                artistName: resolvedAlbum.artistName,
                 lidarrAlbumID: existingID,
                 alreadyExisted: true,
                 searchTriggered: true
@@ -700,14 +1213,14 @@ public actor LidarrClient {
         }
 
         // 3. Add brand-new album via POST /api/v1/album
-        let payload = try Self.buildAddAlbumPayload(fromLookupData: album.rawJSONData, config: config)
+        let payload = try Self.buildAddAlbumPayload(fromLookupData: resolvedAlbum.rawJSONData, config: config)
         let responseData = try await request(path: "/api/v1/album", method: "POST", body: payload, config: config)
         let createdObj = (try? JSONSerialization.jsonObject(with: responseData) as? [String: Any])
         let createdID = createdObj?["id"] as? Int
 
         return LidarrOrderResult(
-            albumTitle: album.title,
-            artistName: album.artistName,
+            albumTitle: resolvedAlbum.title,
+            artistName: resolvedAlbum.artistName,
             lidarrAlbumID: createdID,
             alreadyExisted: false,
             searchTriggered: config.searchOnAdd
