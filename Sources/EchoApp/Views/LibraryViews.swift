@@ -1006,23 +1006,59 @@ struct AlbumCardView: View {
                     .padding(6)
                 }
 
-                // Top-right P (Playlist) & S (Sync / Subscription) corner pills
+                // Top-right P (Playlist) & S (Sync / Subscription) corner pills + overlaid Album Star Rating pill
                 let plState = store.focusedPlaylistState(for: album.tracks)
                 let plName = store.focusedPlaylist?.name ?? "My Playlist"
                 let targetName = store.activeDevice?.name ?? "selected destination"
-                CardPSBadgeStrip(
-                    playlistState: plState,
-                    syncState: state,
-                    isCardHovered: isHovered,
-                    playlistTooltip: plState == .full
-                        ? "Remove '\(album.title)' from playlist '\(plName)'."
-                        : "Add '\(album.title)' to playlist '\(plName)'.",
-                    syncTooltip: state == .full
-                        ? "Synced to '\(targetName)'. Click to remove '\(album.title)'."
-                        : "Include '\(album.title)' in '\(targetName)' sync.",
-                    onTogglePlaylist: { store.toggleTracksInFocusedPlaylist(album.tracks, label: album.title) },
-                    onToggleSync: { store.toggleAlbumSync(album) }
-                )
+                let explicitRating = store.explicitAlbumRating(for: album) ?? 0
+                let avgTrackRating = store.averageTrackRating(for: album)
+                VStack(alignment: .trailing, spacing: 5) {
+                    CardPSBadgeStrip(
+                        playlistState: plState,
+                        syncState: state,
+                        isCardHovered: isHovered,
+                        playlistTooltip: plState == .full
+                            ? "Remove '\(album.title)' from playlist '\(plName)'."
+                            : "Add '\(album.title)' to playlist '\(plName)'.",
+                        syncTooltip: state == .full
+                            ? "Synced to '\(targetName)'. Click to remove '\(album.title)'."
+                            : "Include '\(album.title)' in '\(targetName)' sync.",
+                        onTogglePlaylist: { store.toggleTracksInFocusedPlaylist(album.tracks, label: album.title) },
+                        onToggleSync: { store.toggleAlbumSync(album) }
+                    )
+
+                    if explicitRating > 0 || avgTrackRating != nil || isHovered {
+                        HStack(spacing: 3) {
+                            StarRatingControl(
+                                rating: explicitRating,
+                                derivedAverage: avgTrackRating,
+                                starSize: 9,
+                                spacing: 1.5,
+                                showEmptyWhenUnrated: true,
+                                labelPrefix: "Album Rating"
+                            ) { newRating in
+                                store.setAlbumRating(newRating, for: album)
+                            }
+                            if explicitRating == 0, let avg = avgTrackRating {
+                                Text(String(format: "%.1f", avg))
+                                    .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(EchoTheme.textSecondary)
+                            }
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.black.opacity(0.76))
+                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: EchoTheme.radiusSmall, style: .continuous)
+                                .strokeBorder(
+                                    explicitRating > 0 ? EchoTheme.hiResGold.opacity(0.55) : Color.white.opacity(0.20),
+                                    lineWidth: 0.9
+                                )
+                        )
+                        .shadow(color: Color.black.opacity(0.45), radius: 4, y: 1)
+                    }
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                 .padding(6)
             }
@@ -1077,29 +1113,6 @@ struct AlbumCardView: View {
                         .foregroundStyle(EchoTheme.neoCyan)
                         .help("Average online popularity score for '\(album.title)': \(albumPop)/100")
                     }
-                }
-                let explicitRating = store.explicitAlbumRating(for: album) ?? 0
-                let avgTrackRating = store.averageTrackRating(for: album)
-                if explicitRating > 0 || avgTrackRating != nil || isHovered {
-                    HStack(spacing: 5) {
-                        StarRatingControl(
-                            rating: explicitRating,
-                            derivedAverage: avgTrackRating,
-                            starSize: 9.5,
-                            spacing: 1.5,
-                            showEmptyWhenUnrated: true,
-                            labelPrefix: "Album Rating"
-                        ) { newRating in
-                            store.setAlbumRating(newRating, for: album)
-                        }
-                        if explicitRating == 0, let avg = avgTrackRating {
-                            Text(String(format: "%.1f", avg))
-                                .font(.system(size: 9, design: .monospaced))
-                                .foregroundStyle(EchoTheme.textMuted)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.top, 1)
                 }
             }
         }
