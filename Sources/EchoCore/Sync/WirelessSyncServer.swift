@@ -1105,26 +1105,154 @@ public final class WirelessSyncServer: @unchecked Sendable {
         let token = headers["x-echo-token"] ?? queryMap["token"] ?? ""
         let requestedDeviceUUID = queryMap["deviceId"].flatMap(UUID.init(uuidString:))
 
-        guard let snapshot = resolveAuthorizedSnapshot(requestedDeviceID: requestedDeviceUUID, token: token, allowUnauthenticatedDiscovery: path == "/api/v1/info") else {
+        let snapshot = resolveAuthorizedSnapshot(requestedDeviceID: requestedDeviceUUID, token: token, allowUnauthenticatedDiscovery: path == "/api/v1/info")
+        let isCompanionAuthorized = (snapshot != nil) || isAuthorizedCompanionToken(token)
+
+        guard isCompanionAuthorized || path == "/api/v1/info" else {
             sendJSONError(connection: connection, status: 401, message: "Invalid or missing pairing PIN (X-Echo-Token)")
             return
         }
 
-        // 1. Ping / Manifest Version Check
+        // Apple TV / Full Mac Library Catalog, Streaming, Remote Control & Party Mode Endpoints
+        if method == "GET" && path == "/api/v1/catalog/full" {
+            lock.lock()
+            let catalog = libraryCatalog
+            lock.unlock()
+            let partyFetcher = onFetchPartyState
+            Task { [weak self] in
+                let partyStatus = (await partyFetcher?())?.status ?? WirelessPartyStatus()
+                let payload = catalog.buildFullCatalog(partyStatus: partyStatus)
+                guard let server = self else { return }
+                server.queue.async {
+                    server.sendJSON(connection: connection, value: payload)
+                }
+            }
+            return
+        }
+
+        if (method == "GET" || method == "HEAD") && path.hasPrefix("/api/v1/catalog/track/") {
+            let trackID = String(path.dropFirst("/api/v1/catalog/track/".count))
+            lock.lock()
+            let filePath = libraryCatalog.trackFilePaths[trackID]
+            lock.unlock()
+            guard let filePath, FileManager.default.fileExists(atPath: filePath) else {
+                sendJSONError(connection: connection, status: 404, message: "Track not found in Mac catalog")
+                return
+            }
+            streamFile(atPath: filePath, rangeHeader: headers["range"], headOnly: method == "HEAD", connection: connection)
+            return
+        }
+
+        if (method == "GET" || method == "HEAD") && path.hasPrefix("/api/v1/catalog/episode/") {
+            let epID = String(path.dropFirst("/api/v1/catalog/episode/".count))
+            lock.lock()
+            let filePath = libraryCatalog.episodeFilePaths[epID]
+            lock.unlock()
+            guard let filePath, FileManager.default.fileExists(atPath: filePath) else {
+                sendJSONError(connection: connection, status: 404, message: "Episode not downloaded on Mac")
+                return
+            }
+            streamFile(atPath: filePath, rangeHeader: headers["range"], headOnly: method == "HEAD", connection: connection)
+            return
+        }
+
+        if method == "GET" && path == "/api/v1/remote/state" {
+            guard let handler = onFetchRemoteState else {
+                sendJSONError(connection: connection, status: 503, message: "Mac remote control unavailable")
+                return
+            }
+            Task { [weak self] in
+                let state = await handler()
+                guard let server = self else { return }
+                server.queue.async {
+                    server.sendJSON(connection: connection, value: state)
+                }
+            }
+            return
+        }
+
+        if method == "POST" && path == "/api/v1/remote/command" {
+            guard let req = try? decoder.decode(WirelessRemoteCommandRequest.self, from: body),
+                  let handler = onRemoteCommand else {
+                sendJSONError(connection: connection, status: 400, message: "Invalid remote command payload")
+                return
+            }
+            Task { [weak self] in
+                let resp = await handler(req)
+                guard let server = self else { return }
+                server.queue.async {
+                    server.sendJSON(connection: connection, value: resp, status: resp.ok ? 200 : 400)
+                }
+            }
+            return
+        }
+
+        if method == "GET" && path == "/api/v1/party/state" {
+            guard let handler = onFetchPartyState else {
+                sendJSON(connection: connection, value: WirelessPartyEnvelope(status: WirelessPartyStatus(), state: nil))
+                return
+            }
+            Task { [weak self] in
+                let envelope = await handler()
+                guard let server = self else { return }
+                server.queue.async {
+                    server.sendJSON(connection: connection, value: envelope)
+                }
+            }
+            return
+        }
+
+        // 1. Ping / Manifest Version Check (works with either an iOS snapshot or Companion PIN)
         if method == "GET" && (path == "/api/v1/ping" || path == "/api/v1/info") {
-            let ping = WirelessSyncPing(
-                app: "My Echo",
-                serverName: snapshot.manifest.serverName,
-                deviceID: snapshot.manifest.deviceID,
-                deviceName: snapshot.manifest.deviceName,
-                manifestVersion: snapshot.manifest.manifestVersion,
-                syncMode: snapshot.manifest.syncMode,
-                trackCount: snapshot.manifest.tracks.count,
-                playlistCount: snapshot.manifest.playlists.count,
-                episodeCount: snapshot.manifest.episodes.count,
-                totalBytes: snapshot.totalBytes
-            )
-            sendJSON(connection: connection, value: ping)
+            if let snapshot {
+                let ping = WirelessSyncPing(
+                    app: "My Echo",
+                    serverName: snapshot.manifest.serverName,
+                    deviceID: snapshot.manifest.deviceID,
+                    deviceName: snapshot.manifest.deviceName,
+                    manifestVersion: snapshot.manifest.manifestVersion,
+                    syncMode: snapshot.manifest.syncMode,
+                    trackCount: snapshot.manifest.tracks.count,
+                    playlistCount: snapshot.manifest.playlists.count,
+                    episodeCount: snapshot.manifest.episodes.count,
+                    totalBytes: snapshot.totalBytes
+                )
+                sendJSON(connection: connection, value: ping)
+            } else {
+                lock.lock()
+                let catalog = libraryCatalog
+                lock.unlock()
+                let availableTracks = catalog.tracks.filter(\.isAvailable)
+                let ping = WirelessSyncPing(
+                    app: "My Echo",
+                    serverName: catalog.serverName,
+                    deviceID: "appletv-companion",
+                    deviceName: "Full Mac Library",
+                    manifestVersion: "catalog-\(availableTracks.count)",
+                    syncMode: "catalog",
+                    trackCount: availableTracks.count,
+                    playlistCount: catalog.playlists.count,
+                    episodeCount: catalog.podcasts.flatMap(\.episodes).count,
+                    totalBytes: availableTracks.reduce(0) { $0 + $1.fileSize }
+                )
+                sendJSON(connection: connection, value: ping)
+            }
+            return
+        }
+
+        // 5. Artwork JPEG (works for both iOS Sync and Apple TV Companion)
+        if method == "GET" && path.hasPrefix("/api/v1/artwork/") {
+            let hash = String(path.dropFirst("/api/v1/artwork/".count))
+            guard let data = artworkCache.loadOriginalData(for: hash) ?? artworkCache.loadThumbnailData(for: hash) else {
+                sendJSONError(connection: connection, status: 404, message: "Artwork not found")
+                return
+            }
+            sendRawResponse(connection: connection, status: 200, statusText: "OK", contentType: "image/jpeg", data: data)
+            return
+        }
+
+        guard let snapshot else {
+            sendJSONError(connection: connection, status: 404, message: "No iOS sync profile paired for this PIN — use /api/v1/catalog/* for full library streaming.")
             return
         }
 
@@ -1135,37 +1263,26 @@ public final class WirelessSyncServer: @unchecked Sendable {
         }
 
         // 3. Track Audio Stream
-        if method == "GET" && path.hasPrefix("/api/v1/track/") {
+        if (method == "GET" || method == "HEAD") && path.hasPrefix("/api/v1/track/") {
             let trackID = String(path.dropFirst("/api/v1/track/".count))
             guard let filePath = snapshot.trackFilePaths[trackID],
                   FileManager.default.fileExists(atPath: filePath) else {
                 sendJSONError(connection: connection, status: 404, message: "Track not found")
                 return
             }
-            streamFile(atPath: filePath, rangeHeader: headers["range"], connection: connection)
+            streamFile(atPath: filePath, rangeHeader: headers["range"], headOnly: method == "HEAD", connection: connection)
             return
         }
 
         // 4. Podcast Episode Audio Stream
-        if method == "GET" && path.hasPrefix("/api/v1/episode/") {
+        if (method == "GET" || method == "HEAD") && path.hasPrefix("/api/v1/episode/") {
             let epID = String(path.dropFirst("/api/v1/episode/".count))
             guard let filePath = snapshot.episodeFilePaths[epID],
                   FileManager.default.fileExists(atPath: filePath) else {
                 sendJSONError(connection: connection, status: 404, message: "Episode not found")
                 return
             }
-            streamFile(atPath: filePath, rangeHeader: headers["range"], connection: connection)
-            return
-        }
-
-        // 5. Artwork JPEG
-        if method == "GET" && path.hasPrefix("/api/v1/artwork/") {
-            let hash = String(path.dropFirst("/api/v1/artwork/".count))
-            guard let data = artworkCache.loadOriginalData(for: hash) ?? artworkCache.loadThumbnailData(for: hash) else {
-                sendJSONError(connection: connection, status: 404, message: "Artwork not found")
-                return
-            }
-            sendRawResponse(connection: connection, status: 200, statusText: "OK", contentType: "image/jpeg", data: data)
+            streamFile(atPath: filePath, rangeHeader: headers["range"], headOnly: method == "HEAD", connection: connection)
             return
         }
 
@@ -1266,6 +1383,17 @@ public final class WirelessSyncServer: @unchecked Sendable {
         sendJSONError(connection: connection, status: 404, message: "Unknown endpoint: \(path)")
     }
 
+    private func isAuthorizedCompanionToken(_ token: String) -> Bool {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        lock.lock()
+        defer { lock.unlock() }
+        if let companionToken, !companionToken.isEmpty, companionToken == trimmed {
+            return true
+        }
+        return snapshotsByDeviceID.values.contains { $0.syncToken == trimmed }
+    }
+
     private func resolveAuthorizedSnapshot(requestedDeviceID: UUID?, token: String, allowUnauthenticatedDiscovery: Bool) -> WirelessDeviceSnapshot? {
         lock.lock()
         defer { lock.unlock() }
@@ -1311,7 +1439,7 @@ public final class WirelessSyncServer: @unchecked Sendable {
         })
     }
 
-    private func streamFile(atPath path: String, rangeHeader: String?, connection: NWConnection) {
+    private func streamFile(atPath path: String, rangeHeader: String?, headOnly: Bool = false, connection: NWConnection) {
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
               let totalSize = (attrs[.size] as? NSNumber)?.int64Value,
               let handle = FileHandle(forReadingAtPath: path) else {
@@ -1343,6 +1471,14 @@ public final class WirelessSyncServer: @unchecked Sendable {
             header += "Content-Range: bytes \(startOffset)-\(endOffset)/\(totalSize)\r\n"
         }
         header += "Connection: close\r\n\r\n"
+
+        if headOnly {
+            try? handle.close()
+            connection.send(content: Data(header.utf8), completion: .contentProcessed { _ in
+                connection.cancel()
+            })
+            return
+        }
 
         try? handle.seek(toOffset: UInt64(startOffset))
 

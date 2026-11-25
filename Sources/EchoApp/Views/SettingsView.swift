@@ -743,6 +743,107 @@ struct SettingsView: View {
                     .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusCard).strokeBorder(EchoTheme.border, lineWidth: 1))
                 }
 
+                // 5.5 Apple TV & Living-Room Companion Server
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("APPLE TV & LIVING-ROOM COMPANION")
+                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                        .tracking(1.2)
+                        .foregroundStyle(EchoTheme.neoCyan)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "appletv.fill")
+                                .font(.system(size: 20))
+                                .foregroundStyle(store.appleTVCompanionEnabled && store.isWirelessServerRunning ? EchoTheme.neoMint : EchoTheme.textMuted)
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 8) {
+                                    Text("Apple TV Full-Library Streaming & Mac Remote")
+                                        .font(.system(size: 13.5, weight: .bold))
+                                        .foregroundStyle(EchoTheme.textPrimary)
+                                    Text(store.isWirelessServerRunning ? "ONLINE" : "OFF")
+                                        .font(.system(size: 9, weight: .black, design: .monospaced))
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background((store.isWirelessServerRunning ? EchoTheme.neoMint : EchoTheme.textMuted).opacity(0.18))
+                                        .foregroundStyle(store.isWirelessServerRunning ? EchoTheme.neoMint : EchoTheme.textMuted)
+                                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                                }
+                                Text("Streams your full Mac library, podcasts, Party Mode TV display, and remote playback controls to My Echo on Apple TV via Bonjour (_myecho-sync._tcp).")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(EchoTheme.textSecondary)
+                            }
+                            Spacer()
+                            Toggle("", isOn: Binding(
+                                get: { store.appleTVCompanionEnabled },
+                                set: { store.setAppleTVCompanionEnabled($0) }
+                            ))
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                        }
+
+                        if store.appleTVCompanionEnabled {
+                            HStack(spacing: 16) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("APPLE TV PAIRING PIN")
+                                        .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(EchoTheme.textMuted)
+                                    Text(store.appleTVPairingPIN)
+                                        .font(.system(size: 20, weight: .black, design: .monospaced))
+                                        .tracking(3)
+                                        .foregroundStyle(EchoTheme.neoMint)
+                                }
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("LAN ADDRESS")
+                                        .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(EchoTheme.textMuted)
+                                    let port = store.wirelessServerPort > 0 ? store.wirelessServerPort : WirelessSyncServer.defaultPort
+                                    Text("http://\(store.wirelessServerLANIP ?? "localhost"):\(port)")
+                                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                        .foregroundStyle(EchoTheme.textPrimary)
+                                }
+
+                                Spacer()
+
+                                Button("Copy PIN") {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(store.appleTVPairingPIN, forType: .string)
+                                    store.showToast("Copied Apple TV pairing PIN")
+                                }
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(EchoTheme.surfaceElevated)
+                                .foregroundStyle(EchoTheme.textPrimary)
+                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                .buttonStyle(.plain)
+
+                                Button("New PIN") {
+                                    store.regenerateAppleTVPairingPIN()
+                                }
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(EchoTheme.surfaceElevated)
+                                .foregroundStyle(EchoTheme.textSecondary)
+                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                .buttonStyle(.plain)
+                            }
+                            .padding(10)
+                            .background(EchoTheme.canvas.opacity(0.6))
+                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+
+                            Text("Tip: Any existing iPhone/iPad Wi-Fi Sync PIN also works to pair Apple TV.")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(EchoTheme.textMuted)
+                        }
+                    }
+                    .padding(14)
+                    .background(EchoTheme.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard))
+                    .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusCard).strokeBorder(EchoTheme.border, lineWidth: 1))
+                }
+
                 // 6. Data & Storage Paths
                 VStack(alignment: .leading, spacing: 10) {
                     Text("STORAGE & CACHE")

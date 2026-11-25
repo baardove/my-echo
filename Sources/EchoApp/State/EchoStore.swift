@@ -355,13 +355,15 @@ final class EchoStore {
     private(set) var syncPlansByDeviceID: [UUID: SyncPlan] = [:]
     private var syncPlanTask: Task<Void, Never>?
 
-    // Virtual iPhone Wireless Sync Server State
+    // Virtual iPhone Wireless Sync Server & Apple TV Companion State
     var isWirelessServerRunning: Bool = false
     var wirelessServerPort: UInt16 = 0
     var wirelessServerLANIP: String? = WirelessSyncServer.localLANIPAddress()
     var wirelessServerLastError: String? = nil
     var lastWirelessClientName: String? = nil
     var wirelessManifestVersions: [UUID: String] = [:]
+    var appleTVCompanionEnabled: Bool = true
+    var appleTVPairingPIN: String = ""
 
     // Party Mode (Locked Dynamic "Partymode" Playlist + Stable/Custom-Port Guest Web Server)
     static let defaultPartyPort: UInt16 = 53_333
@@ -889,6 +891,16 @@ final class EchoStore {
         if let maxIntroStr = database.getSetting("partyMaxIntroSeconds"),
            let parsedSecs = Int(maxIntroStr) {
             partyMaxIntroSeconds = max(5, min(60, parsedSecs))
+        }
+        if let tvEnabledStr = database.getSetting("appleTVCompanionEnabled") {
+            appleTVCompanionEnabled = (tvEnabledStr != "false")
+        }
+        if let savedTVPIN = database.getSetting("appleTVPairingPIN"), !savedTVPIN.isEmpty {
+            appleTVPairingPIN = savedTVPIN
+        } else {
+            let generated = DeviceProfile.generatePairingPIN()
+            appleTVPairingPIN = generated
+            database.setSetting("appleTVPairingPIN", value: generated)
         }
 
         rebuildLibraryGroups()
@@ -3543,7 +3555,7 @@ final class EchoStore {
                     self.showToast("iOS subscribed to '\(fetched.title)' — added to Mac")
                     return self.wirelessManifestVersions[deviceID] ?? ""
                 }
-                return WirelessPodcastSubscribeResponse(
+                    return WirelessPodcastSubscribeResponse(
                     ok: true,
                     showID: fetched.id.uuidString,
                     title: fetched.title,
@@ -3554,18 +3566,208 @@ final class EchoStore {
                 return WirelessPodcastSubscribeResponse(ok: false, message: "Subscribe failed: \(error.localizedDescription)")
             }
         }
+
+        // Apple TV / LAN Companion: Live Mac Remote Playback State
+        wirelessSyncServer.onFetchRemoteState = { [weak self] in
+            guard let self else {
+                return WirelessRemotePlaybackState(serverName: Host.current().localizedName ?? "My Echo Mac")
+            }
+            return await MainActor.run {
+                self.buildRemotePlaybackState()
+            }
+        }
+
+        // Apple TV / LAN Companion: Remote Control Commands for Mac Playback
+        wirelessSyncServer.onRemoteCommand = { [weak self] req in
+            guard let self else {
+                return WirelessRemoteCommandResponse(ok: false, message: "Mac store unavailable")
+            }
+            return await MainActor.run {
+                self.handleRemoteCommand(req)
+            }
+        }
+
+        // Apple TV / LAN Companion: Live Party Mode Status & Queue Envelope
+        wirelessSyncServer.onFetchPartyState = { [weak self] in
+            guard let self else {
+                return WirelessPartyEnvelope(status: WirelessPartyStatus(), state: nil)
+            }
+            return await MainActor.run {
+                let status = self.buildCurrentPartyStatus()
+                let state = self.isPartyModeEnabled ? self.buildPartyPlaylistState() : nil
+                return WirelessPartyEnvelope(status: status, state: state)
+            }
+        }
+    }
+
+    func setAppleTVCompanionEnabled(_ enabled: Bool) {
+        appleTVCompanionEnabled = enabled
+        database.setSetting("appleTVCompanionEnabled", value: enabled ? "true" : "false")
+        refreshWirelessSyncServer()
+    }
+
+    func regenerateAppleTVPairingPIN() {
+        let newPIN = DeviceProfile.generatePairingPIN()
+        appleTVPairingPIN = newPIN
+        database.setSetting("appleTVPairingPIN", value: newPIN)
+        refreshWirelessSyncServer()
+        showToast("Generated new Apple TV pairing PIN: \(newPIN)")
+    }
+
+    private func buildCurrentPartyStatus() -> WirelessPartyStatus {
+        let host = partyServerLANIP ?? WirelessSyncServer.localLANIPAddress()
+        let port = partyServerPort > 0 ? Int(partyServerPort) : nil
+        let joinURL: String? = (isPartyModeEnabled && partyServerPort > 0)
+            ? "http://\(host ?? "localhost"):\(partyServerPort)"
+            : nil
+        return WirelessPartyStatus(
+            isLive: isPartyModeEnabled && partyServerPort > 0,
+            port: port,
+            lanIP: host,
+            joinURL: joinURL,
+            playlistName: partyPlaylist?.name ?? Self.partyPlaylistName
+        )
+    }
+
+    private func buildRemotePlaybackState() -> WirelessRemotePlaybackState {
+        let serverName = Host.current().localizedName ?? "My Echo Mac"
+        let currentWireTrack = player.currentTrack.map {
+            WirelessSyncTrack(from: $0, resolvedAlbumArtist: allTrackAlbumByID[$0.id]?.artist)
+        }
+        let allQueue = player.queue
+        let curIdx = max(0, min(player.currentIndex, max(0, allQueue.count - 1)))
+        // Send up to 120 tracks centered around the active index for responsive TV rendering
+        let sliceStart = max(0, curIdx - 10)
+        let sliceEnd = min(allQueue.count, sliceStart + 120)
+        let wireQueue: [WirelessSyncTrack] = (sliceStart < sliceEnd)
+            ? allQueue[sliceStart..<sliceEnd].map { WirelessSyncTrack(from: $0, resolvedAlbumArtist: allTrackAlbumByID[$0.id]?.artist) }
+            : []
+        let adjustedIndex = max(0, curIdx - sliceStart)
+        let outputName = player.activeOutputDevice?.name ?? "System Default"
+
+        return WirelessRemotePlaybackState(
+            serverName: serverName,
+            isPlaying: player.isPlaying,
+            currentTrack: currentWireTrack,
+            currentTime: player.currentTime,
+            duration: player.duration,
+            volume: player.volume,
+            isMuted: player.isMuted,
+            isShuffled: player.isShuffled,
+            repeatMode: player.repeatMode.rawValue,
+            currentIndex: adjustedIndex,
+            queue: wireQueue,
+            outputDeviceName: outputName,
+            partyStatus: buildCurrentPartyStatus()
+        )
+    }
+
+    private func handleRemoteCommand(_ req: WirelessRemoteCommandRequest) -> WirelessRemoteCommandResponse {
+        var message: String?
+        switch req.action {
+        case "togglePlayPause":
+            player.togglePlayPause()
+        case "play":
+            player.resumeOrPlay()
+        case "pause":
+            player.pause()
+        case "next":
+            player.nextTrack()
+        case "previous":
+            player.previousTrack()
+        case "seek":
+            if let secs = req.seconds {
+                player.seek(to: secs)
+            }
+        case "setVolume":
+            if let vol = req.volume {
+                player.volume = max(0.0, min(1.0, vol))
+                if player.isMuted && vol > 0 { player.isMuted = false }
+            }
+        case "toggleMute":
+            player.isMuted.toggle()
+        case "toggleShuffle":
+            player.isShuffled.toggle()
+        case "cycleRepeat":
+            player.cycleRepeatMode()
+        case "jumpToQueueIndex":
+            if let idx = req.queueIndex {
+                let allQueue = player.queue
+                let curIdx = max(0, min(player.currentIndex, max(0, allQueue.count - 1)))
+                let sliceStart = max(0, curIdx - 10)
+                let absoluteIdx = sliceStart + idx
+                if absoluteIdx >= 0 && absoluteIdx < allQueue.count {
+                    player.jumpToQueueIndex(absoluteIdx)
+                }
+            }
+        case "playTrack":
+            if let trackID = req.trackID, let track = tracksByID[trackID] {
+                if let alb = allTrackAlbumByID[track.id],
+                   let idx = alb.tracks.firstIndex(where: { $0.id == track.id }) {
+                    player.play(tracks: alb.tracks, startingAt: idx)
+                } else {
+                    player.playSingle(track)
+                }
+                message = "Playing \(track.title) on Mac"
+            } else {
+                return WirelessRemoteCommandResponse(ok: false, message: "Track not found on Mac", state: buildRemotePlaybackState())
+            }
+        case "playAlbum":
+            if let key = req.albumKey {
+                let matched = albumsByKey[key] ?? albums.first(where: { $0.title.lowercased() == key.lowercased() || $0.id.lowercased() == key.lowercased() })
+                if let alb = matched, !alb.tracks.isEmpty {
+                    player.play(tracks: alb.tracks, startingAt: 0)
+                    message = "Playing \(alb.title) on Mac"
+                } else {
+                    return WirelessRemoteCommandResponse(ok: false, message: "Album not found on Mac", state: buildRemotePlaybackState())
+                }
+            }
+        case "playPlaylist":
+            if let plIDStr = req.playlistID, let plUUID = UUID(uuidString: plIDStr),
+               let pl = playlists.first(where: { $0.id == plUUID }) {
+                let plTracks = tracks(for: pl)
+                if !plTracks.isEmpty {
+                    player.play(tracks: plTracks, startingAt: 0)
+                    message = "Playing playlist \(pl.name) on Mac"
+                } else {
+                    return WirelessRemoteCommandResponse(ok: false, message: "Playlist is empty", state: buildRemotePlaybackState())
+                }
+            }
+        case "startPartyMode":
+            if !isPartyModeEnabled {
+                startPartyMode(navigateToView: false)
+            }
+            message = "Party Mode started on Mac"
+        case "stopPartyMode":
+            if isPartyModeEnabled {
+                stopPartyMode()
+            }
+            message = "Party Mode stopped"
+        default:
+            return WirelessRemoteCommandResponse(ok: false, message: "Unknown remote action: \(req.action)", state: buildRemotePlaybackState())
+        }
+        return WirelessRemoteCommandResponse(ok: true, message: message, state: buildRemotePlaybackState())
     }
 
     func refreshWirelessSyncServer() {
-        wirelessSyncServer.updateLibraryCatalog(tracks: tracks, albums: albums)
+        let serverName = Host.current().localizedName ?? "My Echo Mac"
+        wirelessSyncServer.setCompanionToken(appleTVCompanionEnabled ? appleTVPairingPIN : nil)
+        wirelessSyncServer.updateLibraryCatalog(
+            tracks: tracks,
+            albums: albums,
+            playlists: syncablePlaylists,
+            podcasts: podcasts,
+            albumEditorial: Array(albumEditorialByKey.values),
+            artistEditorial: Array(artistEditorialByKey.values),
+            serverName: serverName
+        )
         let wirelessDevices = devices.filter(\.isVirtualWireless)
-        guard !wirelessDevices.isEmpty else {
+        guard !wirelessDevices.isEmpty || appleTVCompanionEnabled else {
             wirelessSyncServer.updateSnapshots([])
             wirelessSyncServer.stop()
             wirelessManifestVersions = [:]
             return
         }
-        let serverName = Host.current().localizedName ?? "My Echo Mac"
         let snapshotTracks = tracks
         let snapshotPlaylists = syncablePlaylists
         let snapshotPodcasts = podcasts

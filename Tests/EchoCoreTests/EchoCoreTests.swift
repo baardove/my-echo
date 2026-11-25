@@ -1785,6 +1785,129 @@ final class EchoCoreTests: XCTestCase {
         XCTAssertFalse(excludeLow.matches(track: t2, rating: 2))
     }
 
+    func testAppleTVCompanionCatalogAndRemoteEndpoints() async throws {
+        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("echo-tv-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let audioFile = tmpDir.appendingPathComponent("song.flac")
+        let fakeAudio = Data("fLaC0123456789ABCDEF".utf8)
+        try fakeAudio.write(to: audioFile)
+
+        let src = UUID()
+        let track = Track(
+            id: "tv-track-1",
+            sourceID: src,
+            filePath: audioFile.path,
+            fileName: "song.flac",
+            fileSize: Int64(fakeAudio.count),
+            modifiedAt: Date(),
+            format: .flac,
+            title: "Time",
+            artist: "Pink Floyd",
+            albumArtist: "Pink Floyd",
+            album: "The Dark Side of the Moon",
+            trackNumber: 4,
+            year: 1973,
+            duration: 413,
+            sampleRate: 96_000,
+            bitDepth: 24
+        )
+        let albums = AlbumGroup.buildGroups(from: [track])
+        let playlist = Playlist(name: "Living Room", trackIDs: [track.id])
+
+        let server = WirelessSyncServer(artworkCache: ArtworkCache(cacheDirectory: tmpDir))
+        server.setCompanionToken("654321")
+        server.updateLibraryCatalog(
+            tracks: [track],
+            albums: albums,
+            playlists: [playlist],
+            podcasts: [],
+            serverName: "Test Echo Mac"
+        )
+        server.onFetchRemoteState = {
+            WirelessRemotePlaybackState(
+                serverName: "Test Echo Mac",
+                isPlaying: true,
+                currentTrack: WirelessSyncTrack(from: track),
+                currentTime: 42,
+                duration: 413,
+                volume: 0.75,
+                outputDeviceName: "Living Room DAC"
+            )
+        }
+        server.onRemoteCommand = { req in
+            WirelessRemoteCommandResponse(
+                ok: req.action == "togglePlayPause",
+                message: "Toggled",
+                state: WirelessRemotePlaybackState(serverName: "Test Echo Mac", isPlaying: false)
+            )
+        }
+        server.onFetchPartyState = {
+            WirelessPartyEnvelope(
+                status: WirelessPartyStatus(isLive: true, port: 53333, lanIP: "127.0.0.1", joinURL: "http://127.0.0.1:53333", playlistName: "Partymode"),
+                state: nil
+            )
+        }
+
+        let readyExp = expectation(description: "server started")
+        let portBox = LockedBox<UInt16>(0)
+        server.onStatusChanged = { running, port, _ in
+            if running && port > 0 && portBox.value == 0 {
+                portBox.value = port
+                readyExp.fulfill()
+            }
+        }
+        server.start(preferredPort: 0)
+        defer { server.stop() }
+        await fulfillment(of: [readyExp], timeout: 5.0)
+
+        let base = "http://127.0.0.1:\(portBox.value)"
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        // 1. Unauthorized without PIN
+        let (_, unauthResp) = try await URLSession.shared.data(from: URL(string: "\(base)/api/v1/catalog/full")!)
+        XCTAssertEqual((unauthResp as? HTTPURLResponse)?.statusCode, 401)
+
+        // 2. Full catalog with companion PIN
+        var catReq = URLRequest(url: URL(string: "\(base)/api/v1/catalog/full")!)
+        catReq.setValue("654321", forHTTPHeaderField: "X-Echo-Token")
+        let (catData, catResp) = try await URLSession.shared.data(for: catReq)
+        XCTAssertEqual((catResp as? HTTPURLResponse)?.statusCode, 200)
+        let catalog = try decoder.decode(WirelessFullCatalogPayload.self, from: catData)
+        XCTAssertEqual(catalog.serverName, "Test Echo Mac")
+        XCTAssertEqual(catalog.tracks.count, 1)
+        XCTAssertEqual(catalog.playlists.count, 1)
+        XCTAssertTrue(catalog.partyStatus.isLive)
+
+        // 3. Track streaming with query token + HTTP Range header
+        var streamReq = URLRequest(url: URL(string: "\(base)/api/v1/catalog/track/tv-track-1?token=654321")!)
+        streamReq.setValue("bytes=0-3", forHTTPHeaderField: "Range")
+        let (rangeData, rangeResp) = try await URLSession.shared.data(for: streamReq)
+        XCTAssertEqual((rangeResp as? HTTPURLResponse)?.statusCode, 206)
+        XCTAssertEqual(String(data: rangeData, encoding: .utf8), "fLaC")
+
+        // 4. Remote state & command
+        var remReq = URLRequest(url: URL(string: "\(base)/api/v1/remote/state")!)
+        remReq.setValue("654321", forHTTPHeaderField: "X-Echo-Token")
+        let (remData, _) = try await URLSession.shared.data(for: remReq)
+        let remState = try decoder.decode(WirelessRemotePlaybackState.self, from: remData)
+        XCTAssertTrue(remState.isPlaying)
+        XCTAssertEqual(remState.outputDeviceName, "Living Room DAC")
+
+        var cmdReq = URLRequest(url: URL(string: "\(base)/api/v1/remote/command")!)
+        cmdReq.httpMethod = "POST"
+        cmdReq.setValue("654321", forHTTPHeaderField: "X-Echo-Token")
+        cmdReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        cmdReq.httpBody = try JSONEncoder().encode(WirelessRemoteCommandRequest(action: "togglePlayPause"))
+        let (cmdData, cmdResp) = try await URLSession.shared.data(for: cmdReq)
+        XCTAssertEqual((cmdResp as? HTTPURLResponse)?.statusCode, 200)
+        let cmdResult = try decoder.decode(WirelessRemoteCommandResponse.self, from: cmdData)
+        XCTAssertTrue(cmdResult.ok)
+        XCTAssertEqual(cmdResult.state?.isPlaying, false)
+    }
+
     private func appendSynchsafe(_ d: inout Data, _ v: Int) {
         d.append(contentsOf: [
             UInt8((v >> 21) & 0x7F),
