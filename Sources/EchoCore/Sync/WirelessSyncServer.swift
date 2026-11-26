@@ -37,7 +37,7 @@ public struct WirelessSyncTrack: Identifiable, Codable, Hashable, Sendable {
         self.genre = track.genre
         self.duration = track.duration
         self.format = track.format.rawValue
-        let ext = URL(fileURLWithPath: track.filePath).pathExtension.lowercased()
+        let ext = (track.filePath as NSString).pathExtension.lowercased()
         self.fileExtension = ext.isEmpty ? track.format.rawValue : ext
         self.sampleRate = track.sampleRate
         self.bitDepth = track.bitDepth
@@ -110,7 +110,7 @@ public struct WirelessSyncEpisode: Identifiable, Codable, Hashable, Sendable {
         self.duration = episode.duration
         self.fileSize = episode.fileSize
         self.artworkHash = episode.artworkHash
-        let ext = episode.localFilePath.map { URL(fileURLWithPath: $0).pathExtension.lowercased() } ?? "mp3"
+        let ext = episode.localFilePath.map { ($0 as NSString).pathExtension.lowercased() } ?? "mp3"
         self.fileExtension = ext.isEmpty ? "mp3" : ext
         self.guid = episode.guid.isEmpty ? nil : episode.guid
         self.audioURL = episode.audioURL.isEmpty ? nil : episode.audioURL
@@ -1119,12 +1119,21 @@ public final class WirelessSyncServer: @unchecked Sendable {
             let catalog = libraryCatalog
             lock.unlock()
             let partyFetcher = onFetchPartyState
-            Task { [weak self] in
+            Task.detached(priority: .userInitiated) { [weak self] in
                 let partyStatus = (await partyFetcher?())?.status ?? WirelessPartyStatus()
                 let payload = catalog.buildFullCatalog(partyStatus: partyStatus)
+                let enc = JSONEncoder()
+                enc.dateEncodingStrategy = .iso8601
+                let jsonData = (try? enc.encode(payload)) ?? Data("{}".utf8)
                 guard let server = self else { return }
                 server.queue.async {
-                    server.sendJSON(connection: connection, value: payload)
+                    server.sendRawResponse(
+                        connection: connection,
+                        status: 200,
+                        statusText: "OK",
+                        contentType: "application/json",
+                        data: jsonData
+                    )
                 }
             }
             return
@@ -1432,10 +1441,37 @@ public final class WirelessSyncServer: @unchecked Sendable {
         header += "Content-Length: \(data.count)\r\n"
         header += "Connection: close\r\n\r\n"
 
-        var payload = Data(header.utf8)
-        payload.append(data)
-        connection.send(content: payload, completion: .contentProcessed { _ in
+        let headerData = Data(header.utf8)
+        if headerData.count + data.count <= 262_144 {
+            var payload = headerData
+            payload.append(data)
+            connection.send(content: payload, completion: .contentProcessed { _ in
+                connection.cancel()
+            })
+        } else {
+            connection.send(content: headerData, completion: .contentProcessed { [weak self] err in
+                if err != nil {
+                    connection.cancel()
+                    return
+                }
+                self?.sendDataChunks(data: data, offset: 0, connection: connection)
+            })
+        }
+    }
+
+    private func sendDataChunks(data: Data, offset: Int, connection: NWConnection) {
+        if offset >= data.count {
             connection.cancel()
+            return
+        }
+        let end = min(offset + 262_144, data.count)
+        let chunk = data.subdata(in: offset..<end)
+        connection.send(content: chunk, completion: .contentProcessed { [weak self] err in
+            if err != nil {
+                connection.cancel()
+                return
+            }
+            self?.sendDataChunks(data: data, offset: end, connection: connection)
         })
     }
 
@@ -1516,7 +1552,7 @@ public final class WirelessSyncServer: @unchecked Sendable {
     }
 
     private static func mimeType(forPath path: String) -> String {
-        switch URL(fileURLWithPath: path).pathExtension.lowercased() {
+        switch (path as NSString).pathExtension.lowercased() {
         case "flac": return "audio/flac"
         case "mp3": return "audio/mpeg"
         case "m4a", "mp4", "aac": return "audio/mp4"

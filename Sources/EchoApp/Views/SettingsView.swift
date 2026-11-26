@@ -10,6 +10,9 @@ struct SettingsView: View {
     @State private var showResetPlaysConfirm = false
     @State private var lidarrURLDraft: String = ""
     @State private var lidarrKeyDraft: String = ""
+    @State private var echoServerLANURLDraft: String = ""
+    @State private var echoServerTSURLDraft: String = ""
+    @State private var echoServerPINDraft: String = ""
 
     var body: some View {
         ScrollView {
@@ -743,6 +746,152 @@ struct SettingsView: View {
                     .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusCard).strokeBorder(EchoTheme.border, lineWidth: 1))
                 }
 
+                // 5.4 Optional Self-Hosted Echo Server (Unraid / Docker)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("MY ECHO SERVER (UNRAID / DOCKER · OPTIONAL)")
+                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                        .tracking(1.2)
+                        .foregroundStyle(EchoTheme.neoCyan)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "server.rack")
+                                .font(.system(size: 20))
+                                .foregroundStyle(store.echoServerConfig.isEnabled ? EchoTheme.neoMint : EchoTheme.textMuted)
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 8) {
+                                    Text("Offload NAS Indexing, Apple TV Backend & Always-On Party Mode")
+                                        .font(.system(size: 13.5, weight: .bold))
+                                        .foregroundStyle(EchoTheme.textPrimary)
+                                    Text(store.echoServerConfig.isEnabled ? "ENABLED" : "STANDALONE")
+                                        .font(.system(size: 9, weight: .black, design: .monospaced))
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background((store.echoServerConfig.isEnabled ? EchoTheme.neoMint : EchoTheme.textMuted).opacity(0.18))
+                                        .foregroundStyle(store.echoServerConfig.isEnabled ? EchoTheme.neoMint : EchoTheme.textMuted)
+                                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                                }
+                                Text("Optional Docker companion for Unraid/NAS. Pulls tiny compressed delta shards instead of scanning SMB from Mac, while keeping local folders & traditional NAS scanning 100% standalone.")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(EchoTheme.textSecondary)
+                            }
+                            Spacer()
+                            Toggle("", isOn: Binding(
+                                get: { store.echoServerConfig.isEnabled },
+                                set: { enabled in
+                                    var updated = store.echoServerConfig
+                                    updated.isEnabled = enabled
+                                    store.saveEchoServerConfig(updated)
+                                }
+                            ))
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                        }
+
+                        if store.echoServerConfig.isEnabled {
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack(spacing: 10) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("LAN URL")
+                                            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                            .foregroundStyle(EchoTheme.textMuted)
+                                        TextField("http://192.168.1.50:48721", text: $echoServerLANURLDraft)
+                                            .textFieldStyle(.roundedBorder)
+                                    }
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("TAILSCALE URL (OPTIONAL)")
+                                            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                            .foregroundStyle(EchoTheme.textMuted)
+                                        TextField("http://100.92.217.88:48721", text: $echoServerTSURLDraft)
+                                            .textFieldStyle(.roundedBorder)
+                                    }
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("6-DIGIT PIN")
+                                            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                            .foregroundStyle(EchoTheme.textMuted)
+                                        TextField("123456", text: $echoServerPINDraft)
+                                            .textFieldStyle(.roundedBorder)
+                                            .frame(width: 110)
+                                    }
+                                }
+
+                                HStack(spacing: 10) {
+                                    Toggle("Sync Playlists, Ratings, Podcasts & Editorial to Echo Server (for Apple TV)", isOn: Binding(
+                                        get: { store.echoServerConfig.syncSharedState },
+                                        set: { v in
+                                            var updated = store.echoServerConfig
+                                            updated.syncSharedState = v
+                                            store.saveEchoServerConfig(updated)
+                                        }
+                                    ))
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(EchoTheme.textSecondary)
+
+                                    Spacer()
+
+                                    Button(store.isTestingEchoServer ? "Connecting..." : "Save & Test") {
+                                        var updated = store.echoServerConfig
+                                        updated.lanURL = echoServerLANURLDraft
+                                        updated.tailscaleURL = echoServerTSURLDraft
+                                        updated.pairingPIN = echoServerPINDraft
+                                        store.saveEchoServerConfig(updated)
+                                        Task { await store.testEchoServerConnection() }
+                                    }
+                                    .font(.system(size: 11.5, weight: .bold))
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(EchoTheme.neoMint)
+                                    .foregroundStyle(Color.black)
+                                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                    .buttonStyle(.plain)
+                                    .disabled(store.isTestingEchoServer)
+
+                                    Button(store.isSyncingEchoServerState ? "Syncing..." : "Sync Shared State") {
+                                        Task { await store.syncSharedStateWithEchoServer() }
+                                    }
+                                    .font(.system(size: 11.5, weight: .semibold))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(EchoTheme.surfaceElevated)
+                                    .foregroundStyle(EchoTheme.neoCyan)
+                                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                    .buttonStyle(.plain)
+                                    .disabled(!store.echoServerConfig.isConfigured || store.isSyncingEchoServerState)
+
+                                    Button(store.echoServerPartyStatus.isLive ? "Stop Server Party" : "Start Server Party") {
+                                        Task { await store.setEchoServerPartyMode(active: !store.echoServerPartyStatus.isLive) }
+                                    }
+                                    .font(.system(size: 11.5, weight: .semibold))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(EchoTheme.neoMagenta.opacity(0.2))
+                                    .foregroundStyle(EchoTheme.neoMagenta)
+                                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                    .buttonStyle(.plain)
+                                    .disabled(!store.echoServerConfig.isConfigured)
+                                }
+
+                                Text(store.echoServerStatusText)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(EchoTheme.textSecondary)
+
+                                if let err = store.echoServerError {
+                                    Text(err)
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(EchoTheme.dangerCoral)
+                                }
+                            }
+                            .padding(10)
+                            .background(EchoTheme.canvas.opacity(0.6))
+                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                        }
+                    }
+                    .padding(14)
+                    .background(EchoTheme.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard))
+                    .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusCard).strokeBorder(EchoTheme.border, lineWidth: 1))
+                }
+
                 // 5.5 Apple TV & Living-Room Companion Server
                 VStack(alignment: .leading, spacing: 10) {
                     Text("APPLE TV & LIVING-ROOM COMPANION")
@@ -890,6 +1039,9 @@ struct SettingsView: View {
             lastFMKeyDraft = store.lastFMAPIKey
             lidarrURLDraft = store.lidarrConfig.baseURL
             lidarrKeyDraft = store.lidarrConfig.apiKey
+            echoServerLANURLDraft = store.echoServerConfig.lanURL
+            echoServerTSURLDraft = store.echoServerConfig.tailscaleURL
+            echoServerPINDraft = store.echoServerConfig.pairingPIN
         }
         .alert("Reset All Personal Play Counters?", isPresented: $showResetPlaysConfirm) {
             Button("Cancel", role: .cancel) {}

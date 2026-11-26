@@ -1908,6 +1908,65 @@ final class EchoCoreTests: XCTestCase {
         XCTAssertEqual(cmdResult.state?.isPlaying, false)
     }
 
+    func testEchoServerStandaloneDefaultsLegacyIDParityAndDeltaHelpers() throws {
+        // 1. Legacy LibrarySource JSON (without Echo Server fields) MUST decode as `.localDirect` (100% standalone default)
+        let legacyJSON = """
+        {"id":"01009F20-2114-4E9B-9FCC-99E2CFB20D1F","name":"MUSIC","path":"/Volumes/Media/MUSIC","isNetworkVolume":true,"trackCount":16791}
+        """
+        let decodedLegacy = try JSONDecoder().decode(LibrarySource.self, from: Data(legacyJSON.utf8))
+        XCTAssertEqual(decodedLegacy.indexingMode, .localDirect)
+        XCTAssertNil(decodedLegacy.remoteLibraryID)
+        XCTAssertNil(decodedLegacy.lastSyncedRevision)
+
+        // 2. EchoServerTrackRecord.toLocalTrack reconstructs exact legacy macOS Track.id so playlists/ratings/DAP sync stay 100% intact
+        let srcID = UUID()
+        let rec = EchoServerTrackRecord(
+            trackKey: "remote-key-1",
+            legacyId: nil,
+            libraryId: "music",
+            relativePath: "Pink Floyd/Dark Side/04 - Time.flac",
+            fileName: "04 - Time.flac",
+            fileSize: 42_000_000,
+            modifiedAt: Date(timeIntervalSince1970: 1_750_000_000),
+            addedAt: nil,
+            format: "flac",
+            fileExtension: "flac",
+            title: "Time",
+            artist: "Pink Floyd",
+            albumArtist: "Pink Floyd",
+            album: "The Dark Side of the Moon",
+            trackNumber: 4,
+            discNumber: 1,
+            year: 1973,
+            genre: "Progressive Rock",
+            duration: 413,
+            sampleRate: 96000,
+            bitDepth: 24,
+            bitrate: 2800,
+            artworkHash: "abcd1234",
+            hasEmbeddedArtwork: true,
+            lyricsRelativePath: "Pink Floyd/Dark Side/04 - Time.lrc",
+            shardId: 3
+        )
+        let localTrack = rec.toLocalTrack(sourceID: srcID, localMountRoot: "/Volumes/Media/MUSIC")
+        XCTAssertEqual(localTrack.filePath, "/Volumes/Media/MUSIC/Pink Floyd/Dark Side/04 - Time.flac")
+        XCTAssertEqual(localTrack.lyricsPath, "/Volumes/Media/MUSIC/Pink Floyd/Dark Side/04 - Time.lrc")
+        XCTAssertEqual(localTrack.id, AudioMetadataReader.stableTrackID(forPath: "/Volumes/Media/MUSIC/Pink Floyd/Dark Side/04 - Time.flac"))
+        XCTAssertTrue(localTrack.isHiRes)
+
+        // 3. Deterministic shard bucketing is bounded and stable
+        let shardA = EchoServerIndexClient.shardForRelativePath("Pink Floyd/Dark Side/04 - Time.flac", shardCount: 16)
+        let shardB = EchoServerIndexClient.shardForRelativePath("Pink Floyd/Dark Side/04 - Time.flac", shardCount: 16)
+        XCTAssertEqual(shardA, shardB)
+        XCTAssertTrue((0..<16).contains(shardA))
+
+        // 4. Verify RFC 1952 gzip decompression on known valid gzipped NDJSON bytes
+        // Pre-compressed gzip of `{"hello":"echo"}\n`
+        let sampleGZ = Data(base64Encoded: "H4sIAAAAAAAC/6tWykjNyclXslJKTc7IV6rlAgD2eDrgEQAAAA==")!
+        let inflated = try EchoServerIndexClient.gunzip(sampleGZ)
+        XCTAssertEqual(String(data: inflated, encoding: .utf8), "{\"hello\":\"echo\"}\n")
+    }
+
     private func appendSynchsafe(_ d: inout Data, _ v: Int) {
         d.append(contentsOf: [
             UInt8((v >> 21) & 0x7F),

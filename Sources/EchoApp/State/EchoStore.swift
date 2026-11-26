@@ -365,6 +365,17 @@ final class EchoStore {
     var appleTVCompanionEnabled: Bool = true
     var appleTVPairingPIN: String = ""
 
+    // Optional Self-Hosted Echo Server (Unraid / Docker Companion — Off by Default for 100% Standalone Mac Operation)
+    let echoServerClient = EchoServerIndexClient()
+    var echoServerConfig: EchoServerConfig = EchoServerConfig()
+    var echoServerStatusText: String = "Disabled (Standalone Mac Mode)"
+    var echoServerError: String? = nil
+    var echoServerLibraries: [EchoServerLibraryMeta] = []
+    var detectedEchoServersBySourceID: [UUID: DetectedEchoServerForSource] = [:]
+    var isTestingEchoServer: Bool = false
+    var isSyncingEchoServerState: Bool = false
+    var echoServerPartyStatus: WirelessPartyStatus = WirelessPartyStatus()
+
     // Party Mode (Locked Dynamic "Partymode" Playlist + Stable/Custom-Port Guest Web Server)
     static let defaultPartyPort: UInt16 = 53_333
     var isPartyModeEnabled: Bool = false
@@ -902,6 +913,12 @@ final class EchoStore {
             appleTVPairingPIN = generated
             database.setSetting("appleTVPairingPIN", value: generated)
         }
+        if let rawServerCfg = database.getSetting("echoServerConfig"),
+           let data = rawServerCfg.data(using: .utf8),
+           let decoded = try? JSONDecoder().decode(EchoServerConfig.self, from: data) {
+            echoServerConfig = decoded
+            echoServerStatusText = decoded.isEnabled ? "Configured (\(decoded.serverName))" : "Disabled (Standalone Mac Mode)"
+        }
 
         rebuildLibraryGroups()
         rebuildEpisodeMap()
@@ -1389,6 +1406,13 @@ final class EchoStore {
 
     func indexSource(_ source: LibrarySource) async {
         guard !isIndexing else { return }
+
+        // Optional remote Echo Server / `.myecho` share index path (leaves traditional local/SMB NAS path untouched!)
+        if source.indexingMode == .echoServer {
+            await syncSourceFromEchoServer(source)
+            return
+        }
+
         isIndexing = true
         indexProgress = IndexProgress(sourceName: source.name, scannedCount: 0, totalFound: 0, currentFile: "Scanning...")
 
@@ -1427,6 +1451,291 @@ final class EchoStore {
             showToast("'\(source.name)' is offline — kept \(result.tracks.count) cached tracks", isError: true)
         } else if result.addedCount > 0 {
             showToast("Indexed '\(source.name)': \(result.addedCount) new track\(result.addedCount == 1 ? "" : "s") (\(result.tracks.count) total)")
+        }
+    }
+
+    // MARK: - Optional Echo Server (Unraid / Docker) Methods
+
+    func saveEchoServerConfig(_ config: EchoServerConfig) {
+        echoServerConfig = config
+        if let data = try? JSONEncoder().encode(config),
+           let str = String(data: data, encoding: .utf8) {
+            database.setSetting("echoServerConfig", value: str)
+        }
+        if !config.isEnabled {
+            echoServerStatusText = "Disabled (Standalone Mac Mode)"
+            echoServerError = nil
+        }
+    }
+
+    func testEchoServerConnection() async {
+        guard echoServerConfig.isConfigured else {
+            echoServerError = "Enable Echo Server and enter a LAN or Tailscale URL plus 6-digit Pairing PIN."
+            return
+        }
+        isTestingEchoServer = true
+        echoServerError = nil
+        defer { isTestingEchoServer = false }
+
+        do {
+            let (info, activeURL) = try await echoServerClient.ping(config: echoServerConfig)
+            let libs = try await echoServerClient.listLibraries(config: echoServerConfig)
+            let partyEnv = try? await echoServerClient.fetchServerPartyEnvelope(config: echoServerConfig)
+            echoServerConfig.serverName = info.serverName
+            saveEchoServerConfig(echoServerConfig)
+            echoServerLibraries = libs
+            if let partyEnv { echoServerPartyStatus = partyEnv.status }
+            echoServerStatusText = "Connected to \(info.serverName) (\(activeURL)) · \(info.trackCount) tracks · \(libs.count) librar\(libs.count == 1 ? "y" : "ies")"
+            showToast("Connected to \(info.serverName)")
+        } catch {
+            echoServerError = error.localizedDescription
+            echoServerStatusText = "Connection failed"
+        }
+    }
+
+    func linkSourceToEchoServer(_ sourceID: UUID, remoteLibraryID: String) {
+        guard let idx = sources.firstIndex(where: { $0.id == sourceID }) else { return }
+        sources[idx].indexingMode = .echoServer
+        sources[idx].remoteLibraryID = remoteLibraryID
+        sources[idx].lastSyncedRevision = nil
+        sources[idx].cachedShardChecksums = nil
+        database.saveSource(sources[idx])
+        showToast("Linked '\(sources[idx].name)' to Echo Server library '\(remoteLibraryID)'")
+        let updated = sources[idx]
+        Task { await indexSource(updated) }
+    }
+
+    func unlinkSourceFromEchoServer(_ sourceID: UUID) {
+        guard let idx = sources.firstIndex(where: { $0.id == sourceID }) else { return }
+        sources[idx].indexingMode = .localDirect
+        sources[idx].remoteLibraryID = nil
+        sources[idx].lastSyncedRevision = nil
+        sources[idx].cachedShardChecksums = nil
+        database.saveSource(sources[idx])
+        showToast("Switched '\(sources[idx].name)' back to Local / Traditional NAS scanning")
+    }
+
+    func triggerRemoteEchoServerScanAndSync(for source: LibrarySource) async {
+        guard echoServerConfig.isConfigured else { return }
+        do {
+            try await echoServerClient.triggerRemoteScan(config: echoServerConfig, libraryID: source.remoteLibraryID, sync: true)
+            await indexSource(source)
+        } catch {
+            showToast("Remote scan failed: \(error.localizedDescription)", isError: true)
+        }
+    }
+
+    func detectEchoServersForSources() async {
+        for src in sources {
+            if let detected = await echoServerClient.detectServer(for: src) {
+                detectedEchoServersBySourceID[src.id] = detected
+            }
+        }
+    }
+
+    func updateSourceName(_ sourceID: UUID, newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let idx = sources.firstIndex(where: { $0.id == sourceID }) else { return }
+        sources[idx].name = trimmed
+        database.saveSource(sources[idx])
+    }
+
+    func syncSourceFromEchoServer(_ source: LibrarySource) async {
+        isIndexing = true
+        indexProgress = IndexProgress(sourceName: source.name, scannedCount: 0, totalFound: 0, currentFile: "Checking .myecho / Echo Server...")
+        let existing = tracks.filter { $0.sourceID == source.id }
+        do {
+            // Prefer HTTP delta sync when Echo Server PIN is configured; otherwise read `.myecho/manifest.json` directly from the share!
+            let outcome: EchoServerSyncOutcome
+            let dotManifestPath = URL(fileURLWithPath: source.path).appendingPathComponent(".myecho/manifest.json").path
+            let hasLocalDotMyEcho = FileManager.default.fileExists(atPath: dotManifestPath)
+
+            if echoServerConfig.isConfigured {
+                do {
+                    outcome = try await echoServerClient.syncLibraryIndex(
+                        source: source,
+                        existingTracks: existing,
+                        config: echoServerConfig,
+                        artworkCache: artworkCache
+                    ) { [weak self] progress in
+                        Task { @MainActor [weak self] in
+                            self?.indexProgress = progress
+                        }
+                    }
+                } catch {
+                    if hasLocalDotMyEcho {
+                        outcome = try await echoServerClient.syncFromShareDotMyEcho(
+                            source: source,
+                            existingTracks: existing
+                        ) { [weak self] progress in
+                            Task { @MainActor [weak self] in
+                                self?.indexProgress = progress
+                            }
+                        }
+                    } else {
+                        throw error
+                    }
+                }
+            } else if hasLocalDotMyEcho {
+                outcome = try await echoServerClient.syncFromShareDotMyEcho(
+                    source: source,
+                    existingTracks: existing
+                ) { [weak self] progress in
+                    Task { @MainActor [weak self] in
+                        self?.indexProgress = progress
+                    }
+                }
+            } else {
+                throw NSError(domain: "EchoServer", code: 400, userInfo: [
+                    NSLocalizedDescriptionKey: "No .myecho/manifest.json on share and Echo Server PIN is not configured yet."
+                ])
+            }
+
+            let hasChanges = outcome.addedCount > 0 || outcome.updatedCount > 0 || outcome.removedCount > 0 || outcome.tracks.count != existing.count
+            if hasChanges {
+                database.replaceTracks(forSourceID: source.id, tracks: outcome.tracks)
+                tracks.removeAll { $0.sourceID == source.id }
+                tracks.append(contentsOf: outcome.tracks)
+            }
+
+            if let idx = sources.firstIndex(where: { $0.id == source.id }) {
+                sources[idx].lastIndexedAt = Date()
+                sources[idx].trackCount = outcome.tracks.count
+                sources[idx].lastSyncedRevision = outcome.newRevision
+                sources[idx].cachedShardChecksums = outcome.shardChecksums
+                database.saveSource(sources[idx])
+            }
+
+            if hasChanges {
+                rebuildLibraryGroups()
+                recomputeSyncPlan()
+            }
+
+            // Ingest album & artist editorial info bundled alongside the index shards / .myecho
+            for item in outcome.albumEditorial where item.hasDisplayableContent {
+                let key = item.albumKey.lowercased()
+                if let existing = albumEditorialByKey[key], existing.fetchedAt >= item.fetchedAt { continue }
+                albumEditorialByKey[key] = item
+                database.saveAlbumEditorial(item)
+            }
+            for item in outcome.artistEditorial where item.hasDisplayableContent {
+                let key = item.artistKey.lowercased()
+                if let existing = artistEditorialByKey[key], existing.fetchedAt >= item.fetchedAt { continue }
+                artistEditorialByKey[key] = item
+                database.saveArtistEditorial(item)
+            }
+
+            if echoServerConfig.isConfigured && echoServerConfig.syncSharedState {
+                await syncSharedStateWithEchoServer(silent: true)
+            }
+
+            isIndexing = false
+            indexProgress = nil
+
+            let modeLabel = outcome.usedDelta ? "delta" : "\(outcome.downloadedShards) shard\(outcome.downloadedShards == 1 ? "" : "s")"
+            if outcome.addedCount > 0 || outcome.updatedCount > 0 || outcome.removedCount > 0 {
+                showToast("Synced '\(source.name)' rev #\(outcome.newRevision) (\(modeLabel)): +\(outcome.addedCount) ~\(outcome.updatedCount) -\(outcome.removedCount)")
+            } else {
+                showToast("'\(source.name)' up to date (rev #\(outcome.newRevision))")
+            }
+        } catch {
+            isIndexing = false
+            indexProgress = nil
+            echoServerError = error.localizedDescription
+            showToast("Echo Server sync failed — kept \(existing.count) cached tracks (\(error.localizedDescription))", isError: true)
+        }
+    }
+
+    func syncSharedStateWithEchoServer(silent: Bool = false) async {
+        guard echoServerConfig.isConfigured else { return }
+        isSyncingEchoServerState = true
+        defer { isSyncingEchoServerState = false }
+
+        let payload = EchoServerSharedStatePayload(
+            playlists: syncablePlaylists.map { EchoServerSharedPlaylist(from: $0) },
+            trackStats: trackStats.values.map { EchoServerSharedTrackStats(from: $0) },
+            albumRatings: albumRatings.values.map { EchoServerSharedAlbumRating(from: $0) },
+            podcasts: podcasts.filter { !$0.isSingleEpisodesBucket }.map { EchoServerSharedPodcastFeed(from: $0) },
+            albumEditorial: Array(albumEditorialByKey.values.filter(\.hasDisplayableContent)),
+            artistEditorial: Array(artistEditorialByKey.values.filter(\.hasDisplayableContent))
+        )
+
+        do {
+            let merged = try await echoServerClient.syncSharedState(config: echoServerConfig, payload: payload)
+            // Merge back track ratings & play counts from Echo Server
+            if let remoteStats = merged.trackStats {
+                for remote in remoteStats {
+                    var local = trackStats[remote.trackID] ?? TrackStats(trackID: remote.trackID)
+                    var changed = false
+                    if remote.userPlayCount > local.userPlayCount {
+                        local.userPlayCount = remote.userPlayCount
+                        changed = true
+                    }
+                    if let rLast = remote.lastPlayedAt, (local.lastPlayedAt == nil || rLast > local.lastPlayedAt!) {
+                        local.lastPlayedAt = rLast
+                        changed = true
+                    }
+                    if local.userRating != remote.userRating {
+                        local.userRating = remote.userRating
+                        changed = true
+                    }
+                    if changed {
+                        trackStats[remote.trackID] = local
+                        database.saveTrackStats(local)
+                    }
+                }
+            }
+            // Merge back album ratings from Echo Server
+            if let remoteAlbRatings = merged.albumRatings {
+                for remote in remoteAlbRatings {
+                    let key = remote.albumKey.lowercased()
+                    if remote.deleted == true || remote.rating <= 0 {
+                        if let existing = albumRatings[key], remote.updatedAt >= existing.updatedAt {
+                            albumRatings.removeValue(forKey: key)
+                            database.deleteAlbumRating(albumKey: key)
+                        }
+                    } else if albumRatings[key] == nil || remote.updatedAt >= albumRatings[key]!.updatedAt {
+                        let entry = AlbumUserRating(albumKey: key, rating: min(5, max(1, remote.rating)), updatedAt: remote.updatedAt)
+                        albumRatings[key] = entry
+                        database.saveAlbumRating(entry)
+                    }
+                }
+            }
+            // Merge back newer editorial from Echo Server
+            if let remoteEd = merged.albumEditorial {
+                for item in remoteEd {
+                    if albumEditorialByKey[item.albumKey] == nil {
+                        albumEditorialByKey[item.albumKey] = item
+                        database.saveAlbumEditorial(item)
+                    }
+                }
+            }
+            if let remoteArtEd = merged.artistEditorial {
+                for item in remoteArtEd {
+                    if artistEditorialByKey[item.artistKey] == nil {
+                        artistEditorialByKey[item.artistKey] = item
+                        database.saveArtistEditorial(item)
+                    }
+                }
+            }
+            if !silent {
+                showToast("Synced playlists, ratings, podcasts & editorial cache with \(echoServerConfig.serverName)")
+            }
+        } catch {
+            if !silent {
+                showToast("Shared state sync failed: \(error.localizedDescription)", isError: true)
+            }
+        }
+    }
+
+    func setEchoServerPartyMode(active: Bool) async {
+        guard echoServerConfig.isConfigured else { return }
+        do {
+            let env = try await echoServerClient.setServerPartyActive(config: echoServerConfig, active: active)
+            echoServerPartyStatus = env.status
+            showToast(active ? "Started Party Mode on \(echoServerConfig.serverName)" : "Stopped Party Mode on \(echoServerConfig.serverName)")
+        } catch {
+            showToast("Echo Server Party error: \(error.localizedDescription)", isError: true)
         }
     }
 
@@ -4322,6 +4631,15 @@ final class EchoStore {
         current.userRating = clamped
         trackStats[track.id] = current
         database.saveTrackStats(current)
+        if echoServerConfig.isConfigured && echoServerConfig.syncSharedState {
+            let updatedStats = EchoServerSharedTrackStats(from: current, updatedAt: Date())
+            Task {
+                _ = try? await echoServerClient.syncSharedState(
+                    config: echoServerConfig,
+                    payload: EchoServerSharedStatePayload(trackStats: [updatedStats])
+                )
+            }
+        }
     }
 
     func explicitAlbumRating(for album: AlbumGroup) -> Int? {
@@ -4344,13 +4662,32 @@ final class EchoStore {
 
     func setAlbumRating(_ rating: Int?, for album: AlbumGroup) {
         let clamped: Int? = rating.flatMap { $0 >= 1 ? min(5, $0) : nil }
+        let now = Date()
         if let clamped {
-            let entry = AlbumUserRating(albumKey: album.id, rating: clamped, updatedAt: Date())
+            let entry = AlbumUserRating(albumKey: album.id, rating: clamped, updatedAt: now)
             albumRatings[album.id] = entry
             database.saveAlbumRating(entry)
+            if echoServerConfig.isConfigured && echoServerConfig.syncSharedState {
+                let shared = EchoServerSharedAlbumRating(from: entry, deleted: false)
+                Task {
+                    _ = try? await echoServerClient.syncSharedState(
+                        config: echoServerConfig,
+                        payload: EchoServerSharedStatePayload(albumRatings: [shared])
+                    )
+                }
+            }
         } else {
             albumRatings.removeValue(forKey: album.id)
             database.deleteAlbumRating(albumKey: album.id)
+            if echoServerConfig.isConfigured && echoServerConfig.syncSharedState {
+                let deleted = EchoServerSharedAlbumRating(from: AlbumUserRating(albumKey: album.id, rating: 0, updatedAt: now), deleted: true)
+                Task {
+                    _ = try? await echoServerClient.syncSharedState(
+                        config: echoServerConfig,
+                        payload: EchoServerSharedStatePayload(albumRatings: [deleted])
+                    )
+                }
+            }
         }
     }
 

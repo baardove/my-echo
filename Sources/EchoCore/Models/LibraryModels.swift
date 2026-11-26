@@ -65,6 +65,64 @@ public enum AudioFormat: String, Codable, CaseIterable, Sendable, Hashable {
     ]
 }
 
+public enum LibraryIndexingMode: String, Codable, CaseIterable, Hashable, Sendable {
+    /// Traditional standalone local folder or mounted SMB/NFS NAS scanning via LibraryIndexer.
+    case localDirect
+    /// Optional remote indexing via My Echo Server (Unraid/Docker) using compressed delta/shard snapshots.
+    case echoServer
+}
+
+public struct EchoServerConfig: Codable, Hashable, Sendable {
+    public var isEnabled: Bool
+    public var serverName: String
+    public var lanURL: String
+    public var tailscaleURL: String
+    public var pairingPIN: String
+    public var syncSharedState: Bool
+
+    public init(
+        isEnabled: Bool = false,
+        serverName: String = "My Echo Server",
+        lanURL: String = "",
+        tailscaleURL: String = "",
+        pairingPIN: String = "",
+        syncSharedState: Bool = true
+    ) {
+        self.isEnabled = isEnabled
+        self.serverName = serverName
+        self.lanURL = lanURL
+        self.tailscaleURL = tailscaleURL
+        self.pairingPIN = pairingPIN
+        self.syncSharedState = syncSharedState
+    }
+
+    public var isConfigured: Bool {
+        isEnabled
+            && (!lanURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !tailscaleURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            && !pairingPIN.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    public var candidateBaseURLs: [String] {
+        [lanURL, tailscaleURL]
+            .map { Self.normalizeURL($0) }
+            .filter { !$0.isEmpty }
+            .reduce(into: [String]()) { acc, u in
+                if !acc.contains(u) { acc.append(u) }
+            }
+    }
+
+    public static func normalizeURL(_ raw: String) -> String {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return "" }
+        if !s.lowercased().hasPrefix("http://") && !s.lowercased().hasPrefix("https://") {
+            s = "http://" + s
+        }
+        while s.hasSuffix("/") { s.removeLast() }
+        return s
+    }
+}
+
 public struct LibrarySource: Identifiable, Codable, Hashable, Sendable {
     public var id: UUID
     public var name: String
@@ -72,6 +130,11 @@ public struct LibrarySource: Identifiable, Codable, Hashable, Sendable {
     public var isNetworkVolume: Bool
     public var lastIndexedAt: Date?
     public var trackCount: Int
+    /// Defaults to `.localDirect` so standalone local/SMB NAS behavior is 100% preserved.
+    public var indexingMode: LibraryIndexingMode
+    public var remoteLibraryID: String?
+    public var lastSyncedRevision: Int?
+    public var cachedShardChecksums: [String: String]?
 
     public init(
         id: UUID = UUID(),
@@ -79,7 +142,11 @@ public struct LibrarySource: Identifiable, Codable, Hashable, Sendable {
         path: String,
         isNetworkVolume: Bool = false,
         lastIndexedAt: Date? = nil,
-        trackCount: Int = 0
+        trackCount: Int = 0,
+        indexingMode: LibraryIndexingMode = .localDirect,
+        remoteLibraryID: String? = nil,
+        lastSyncedRevision: Int? = nil,
+        cachedShardChecksums: [String: String]? = nil
     ) {
         self.id = id
         self.name = name
@@ -87,10 +154,40 @@ public struct LibrarySource: Identifiable, Codable, Hashable, Sendable {
         self.isNetworkVolume = isNetworkVolume
         self.lastIndexedAt = lastIndexedAt
         self.trackCount = trackCount
+        self.indexingMode = indexingMode
+        self.remoteLibraryID = remoteLibraryID
+        self.lastSyncedRevision = lastSyncedRevision
+        self.cachedShardChecksums = cachedShardChecksums
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, path, isNetworkVolume, lastIndexedAt, trackCount
+        case indexingMode, remoteLibraryID, lastSyncedRevision, cachedShardChecksums
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        path = try c.decode(String.self, forKey: .path)
+        isNetworkVolume = try c.decodeIfPresent(Bool.self, forKey: .isNetworkVolume) ?? false
+        lastIndexedAt = try c.decodeIfPresent(Date.self, forKey: .lastIndexedAt)
+        trackCount = try c.decodeIfPresent(Int.self, forKey: .trackCount) ?? 0
+        indexingMode = try c.decodeIfPresent(LibraryIndexingMode.self, forKey: .indexingMode) ?? .localDirect
+        remoteLibraryID = try c.decodeIfPresent(String.self, forKey: .remoteLibraryID)
+        lastSyncedRevision = try c.decodeIfPresent(Int.self, forKey: .lastSyncedRevision)
+        cachedShardChecksums = try c.decodeIfPresent([String: String].self, forKey: .cachedShardChecksums)
+    }
+
+    public var isLocalPathMounted: Bool {
+        FileManager.default.fileExists(atPath: path)
     }
 
     public var isAvailable: Bool {
-        FileManager.default.fileExists(atPath: path)
+        if indexingMode == .echoServer {
+            return true
+        }
+        return isLocalPathMounted
     }
 }
 

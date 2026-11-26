@@ -1986,181 +1986,551 @@ struct PlaylistDetailView: View {
 
 struct SourcesView: View {
     @Environment(EchoStore.self) private var store
+    @State private var configuringSourceID: UUID? = nil
+    @State private var draftSourceName: String = ""
+    @State private var draftIndexingMode: LibraryIndexingMode = .localDirect
+    @State private var draftRemoteLibID: String = "music"
+    @State private var draftLANURL: String = ""
+    @State private var draftTailscaleURL: String = ""
+    @State private var draftPIN: String = ""
+    @State private var draftSyncSharedState: Bool = true
+
+    private var configuringSource: LibrarySource? {
+        guard let id = configuringSourceID else { return nil }
+        return store.sources.first(where: { $0.id == id })
+    }
+
+    private func openSourceSettings(_ source: LibrarySource) {
+        configuringSourceID = source.id
+        draftSourceName = source.name
+        draftIndexingMode = source.indexingMode
+        let detected = store.detectedEchoServersBySourceID[source.id]
+        draftRemoteLibID = source.remoteLibraryID ?? detected?.libraryID ?? store.echoServerLibraries.first?.id ?? "music"
+        draftLANURL = store.echoServerConfig.lanURL.isEmpty ? (detected?.baseURL ?? "") : store.echoServerConfig.lanURL
+        draftTailscaleURL = store.echoServerConfig.tailscaleURL
+        draftPIN = store.echoServerConfig.pairingPIN
+        draftSyncSharedState = store.echoServerConfig.syncSharedState
+    }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Library Sources & NAS")
-                            .font(.system(size: 26, weight: .black, design: .rounded))
-                            .foregroundStyle(EchoTheme.textPrimary)
-                        Text("Index local music folders, external drives, or mounted SMB/NFS NAS shares. Offline NAS sources preserve your playlists and sync selections.")
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(EchoTheme.textSecondary)
-                    }
-                    Spacer()
-
-                    HStack(spacing: 10) {
-                        NeoPickerDropdown(
-                            prefix: "Auto-Scan",
-                            icon: "clock.arrow.2.circlepath",
-                            selection: Binding(
-                                get: { store.autoIndexInterval },
-                                set: { store.setAutoIndexInterval($0) }
-                            ),
-                            options: AutoIndexInterval.allCases.map { ($0, $0.displayName) }
-                        )
-                        .fixedSize()
-                        .help("Automatically re-scan online library folders and NAS shares on a schedule. Silent unless new tracks are found.")
-
-                        NeoSecondaryButton(
-                            title: "Re-Index All",
-                            icon: "arrow.clockwise",
-                            disabled: store.isIndexing || store.sources.isEmpty
-                        ) {
-                            store.indexAllSources()
+        ZStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Library Sources & NAS")
+                                .font(.system(size: 26, weight: .black, design: .rounded))
+                                .foregroundStyle(EchoTheme.textPrimary)
+                            Text("Index local music folders, external drives, or mounted SMB/NFS NAS shares. Click the gear button on any volume to enable My Echo Server / .myecho indexing.")
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(EchoTheme.textSecondary)
                         }
+                        Spacer()
 
-                        NeoPrimaryButton(title: "Add Folder / NAS", icon: "folder.badge.plus") {
-                            store.addLibrarySourceViaPanel()
+                        HStack(spacing: 10) {
+                            NeoPickerDropdown(
+                                prefix: "Auto-Scan",
+                                icon: "clock.arrow.2.circlepath",
+                                selection: Binding(
+                                    get: { store.autoIndexInterval },
+                                    set: { store.setAutoIndexInterval($0) }
+                                ),
+                                options: AutoIndexInterval.allCases.map { ($0, $0.displayName) }
+                            )
+                            .fixedSize()
+                            .help("Automatically re-scan online library folders and NAS shares on a schedule. Silent unless new tracks are found.")
+
+                            NeoSecondaryButton(
+                                title: "Re-Index All",
+                                icon: "arrow.clockwise",
+                                disabled: store.isIndexing || store.sources.isEmpty
+                            ) {
+                                store.indexAllSources()
+                            }
+
+                            NeoPrimaryButton(title: "Add Folder / NAS", icon: "folder.badge.plus") {
+                                store.addLibrarySourceViaPanel()
+                            }
                         }
                     }
-                }
 
-                if store.sources.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "externaldrive.badge.plus")
-                            .font(.system(size: 40))
-                            .foregroundStyle(EchoTheme.neoMint)
-                        Text("No library folders added yet")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(EchoTheme.textPrimary)
-                        Text("Add your local Music folder or a mounted NAS volume under /Volumes/...")
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(EchoTheme.textSecondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(44)
-                    .background(EchoTheme.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard))
-                } else {
-                    VStack(spacing: 12) {
-                        ForEach(store.sources) { source in
-                            let online = source.isAvailable
-                            HStack(spacing: 16) {
-                                ZStack {
-                                    RoundedRectangle(cornerRadius: EchoTheme.radiusCard)
-                                        .fill(online ? EchoTheme.neoMint.opacity(0.14) : EchoTheme.dangerCoral.opacity(0.14))
-                                        .frame(width: 48, height: 48)
-                                    Image(systemName: source.isNetworkVolume ? "externaldrive.connected.to.line.below.fill" : "folder.fill")
-                                        .font(.system(size: 20))
-                                        .foregroundStyle(online ? EchoTheme.neoMint : EchoTheme.dangerCoral)
-                                }
-
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack(spacing: 8) {
-                                        Text(source.name)
-                                            .font(.system(size: 14.5, weight: .bold))
-                                            .foregroundStyle(EchoTheme.textPrimary)
-                                        Text(online ? "ONLINE" : "OFFLINE")
-                                            .font(.system(size: 9, weight: .black, design: .monospaced))
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(online ? EchoTheme.neoMint.opacity(0.2) : EchoTheme.dangerCoral.opacity(0.2))
+                    if store.sources.isEmpty {
+                        VStack(spacing: 12) {
+                            Image(systemName: "externaldrive.badge.plus")
+                                .font(.system(size: 40))
+                                .foregroundStyle(EchoTheme.neoMint)
+                            Text("No library folders added yet")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundStyle(EchoTheme.textPrimary)
+                            Text("Add your local Music folder or a mounted NAS volume under /Volumes/...")
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(EchoTheme.textSecondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(44)
+                        .background(EchoTheme.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard))
+                    } else {
+                        VStack(spacing: 12) {
+                            ForEach(store.sources) { source in
+                                let online = source.isAvailable
+                                let detected = store.detectedEchoServersBySourceID[source.id]
+                                HStack(spacing: 16) {
+                                    ZStack {
+                                        RoundedRectangle(cornerRadius: EchoTheme.radiusCard)
+                                            .fill(online ? EchoTheme.neoMint.opacity(0.14) : EchoTheme.dangerCoral.opacity(0.14))
+                                            .frame(width: 48, height: 48)
+                                        Image(systemName: source.indexingMode == .echoServer ? "server.rack" : (source.isNetworkVolume ? "externaldrive.connected.to.line.below.fill" : "folder.fill"))
+                                            .font(.system(size: 20))
                                             .foregroundStyle(online ? EchoTheme.neoMint : EchoTheme.dangerCoral)
-                                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
-                                        if source.isNetworkVolume {
-                                            Text("NAS / NETWORK")
-                                                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                    }
+
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack(spacing: 8) {
+                                            Text(source.name)
+                                                .font(.system(size: 14.5, weight: .bold))
+                                                .foregroundStyle(EchoTheme.textPrimary)
+                                            Text(online ? "ONLINE" : "OFFLINE")
+                                                .font(.system(size: 9, weight: .black, design: .monospaced))
                                                 .padding(.horizontal, 6)
                                                 .padding(.vertical, 2)
-                                                .background(EchoTheme.neoCyan.opacity(0.16))
-                                                .foregroundStyle(EchoTheme.neoCyan)
+                                                .background(online ? EchoTheme.neoMint.opacity(0.2) : EchoTheme.dangerCoral.opacity(0.2))
+                                                .foregroundStyle(online ? EchoTheme.neoMint : EchoTheme.dangerCoral)
                                                 .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                                            if source.indexingMode == .echoServer {
+                                                Text("ECHO SERVER\(source.lastSyncedRevision.map { " · REV #\($0)" } ?? "")")
+                                                    .font(.system(size: 9, weight: .black, design: .monospaced))
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 2)
+                                                    .background(EchoTheme.neoMint.opacity(0.20))
+                                                    .foregroundStyle(EchoTheme.neoMint)
+                                                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                                            } else if source.isNetworkVolume {
+                                                Text("NAS / NETWORK")
+                                                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 2)
+                                                    .background(EchoTheme.neoCyan.opacity(0.16))
+                                                    .foregroundStyle(EchoTheme.neoCyan)
+                                                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                                            }
+                                            if let det = detected, source.indexingMode != .echoServer {
+                                                Button {
+                                                    openSourceSettings(source)
+                                                } label: {
+                                                    Text(det.hasDotMyEchoIndex ? ".MYECHO DETECTED · ENABLE" : "ECHO SERVER DETECTED · ENABLE")
+                                                        .font(.system(size: 9, weight: .black, design: .monospaced))
+                                                        .padding(.horizontal, 7)
+                                                        .padding(.vertical, 2)
+                                                        .background(EchoTheme.neoMagenta.opacity(0.2))
+                                                        .foregroundStyle(EchoTheme.neoMagenta)
+                                                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                                                }
+                                                .buttonStyle(.plain)
+                                                .help("Detected \(det.serverName) (\(det.baseURL)). Click to enable fast compressed index syncing for this volume.")
+                                            }
                                         }
-                                    }
 
-                                    Text(source.path)
-                                        .font(.system(size: 11.5, design: .monospaced))
-                                        .foregroundStyle(EchoTheme.textMuted)
-                                        .lineLimit(1)
+                                        Text(source.path)
+                                            .font(.system(size: 11.5, design: .monospaced))
+                                            .foregroundStyle(EchoTheme.textMuted)
+                                            .lineLimit(1)
 
-                                    HStack(spacing: 12) {
-                                        Text("\(source.trackCount) indexed tracks")
-                                            .font(.system(size: 11.5))
-                                            .foregroundStyle(EchoTheme.textSecondary)
-                                        if let date = source.lastIndexedAt {
-                                            Text("Last scanned \(date.formatted(date: .abbreviated, time: .shortened))")
+                                        HStack(spacing: 12) {
+                                            Text("\(source.trackCount) indexed tracks")
                                                 .font(.system(size: 11.5))
-                                                .foregroundStyle(EchoTheme.textMuted)
+                                                .foregroundStyle(EchoTheme.textSecondary)
+                                            if let date = source.lastIndexedAt {
+                                                Text("Last scanned \(date.formatted(date: .abbreviated, time: .shortened))")
+                                                    .font(.system(size: 11.5))
+                                                    .foregroundStyle(EchoTheme.textMuted)
+                                            }
                                         }
                                     }
-                                }
 
-                                Spacer()
+                                    Spacer()
 
-                                let isScopedHere = store.selectedSourceID == source.id
-                                Button {
-                                    store.selectLibrarySource(isScopedHere ? nil : source.id)
-                                    if !isScopedHere {
-                                        store.navigate(to: .albums)
+                                    let isScopedHere = store.selectedSourceID == source.id
+                                    Button {
+                                        store.selectLibrarySource(isScopedHere ? nil : source.id)
+                                        if !isScopedHere {
+                                            store.navigate(to: .albums)
+                                        }
+                                    } label: {
+                                        Image(systemName: isScopedHere ? "checkmark.square.fill" : "scope")
+                                            .font(.system(size: 12.5, weight: .semibold))
+                                            .frame(width: 30, height: 30)
+                                            .background(isScopedHere ? EchoTheme.neoCyan.opacity(0.22) : EchoTheme.surfaceElevated)
+                                            .foregroundStyle(isScopedHere ? EchoTheme.neoCyan : EchoTheme.textPrimary)
+                                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                                            .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(isScopedHere ? EchoTheme.neoCyan : EchoTheme.border, lineWidth: 1))
                                     }
-                                } label: {
-                                    Image(systemName: isScopedHere ? "checkmark.square.fill" : "scope")
-                                        .font(.system(size: 12.5, weight: .semibold))
-                                        .frame(width: 30, height: 30)
-                                        .background(isScopedHere ? EchoTheme.neoCyan.opacity(0.22) : EchoTheme.surfaceElevated)
-                                        .foregroundStyle(isScopedHere ? EchoTheme.neoCyan : EchoTheme.textPrimary)
-                                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
-                                        .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(isScopedHere ? EchoTheme.neoCyan : EchoTheme.border, lineWidth: 1))
-                                }
-                                .buttonStyle(.plain)
-                                .help(isScopedHere
-                                      ? "Currently exploring inside '\(source.name)'. Click to return to All Libraries."
-                                      : "Focus & stay inside '\(source.name)' while browsing Artists, Albums, Tracks, and using Global Search.")
+                                    .buttonStyle(.plain)
+                                    .help(isScopedHere
+                                          ? "Currently exploring inside '\(source.name)'. Click to return to All Libraries."
+                                          : "Focus & stay inside '\(source.name)' while browsing Artists, Albums, Tracks, and using Global Search.")
 
-                                Button {
-                                    Task { await store.indexSource(source) }
-                                } label: {
-                                    Image(systemName: "arrow.clockwise")
-                                        .font(.system(size: 12.5, weight: .semibold))
-                                        .frame(width: 30, height: 30)
-                                        .background(EchoTheme.surfaceElevated)
-                                        .foregroundStyle(EchoTheme.neoMint)
-                                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
-                                        .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous).strokeBorder(EchoTheme.neoMint.opacity(0.45), lineWidth: 1))
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(store.isIndexing)
-                                .help("Re-scan '\(source.name)' for newly added, modified, or removed audio files.")
+                                    // Source Configuration Settings Lightbox Button
+                                    Button {
+                                        openSourceSettings(source)
+                                    } label: {
+                                        Image(systemName: "gearshape.fill")
+                                            .font(.system(size: 12.5, weight: .semibold))
+                                            .frame(width: 30, height: 30)
+                                            .background(source.indexingMode == .echoServer ? EchoTheme.neoCyan.opacity(0.18) : EchoTheme.surfaceElevated)
+                                            .foregroundStyle(source.indexingMode == .echoServer ? EchoTheme.neoCyan : EchoTheme.textPrimary)
+                                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+                                            .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous).strokeBorder(source.indexingMode == .echoServer ? EchoTheme.neoCyan.opacity(0.55) : EchoTheme.border, lineWidth: 1))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Configure '\(source.name)' — switch between Local/SMB direct scan and My Echo Server / .myecho share index.")
 
-                                Button(role: .destructive) {
-                                    store.removeLibrarySource(source)
-                                } label: {
-                                    Image(systemName: "trash")
-                                        .font(.system(size: 12.5))
-                                        .padding(8)
-                                        .background(EchoTheme.dangerCoral.opacity(0.15))
-                                        .foregroundStyle(EchoTheme.dangerCoral)
-                                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard))
+                                    Button {
+                                        Task { await store.indexSource(source) }
+                                    } label: {
+                                        Image(systemName: "arrow.clockwise")
+                                            .font(.system(size: 12.5, weight: .semibold))
+                                            .frame(width: 30, height: 30)
+                                            .background(EchoTheme.surfaceElevated)
+                                            .foregroundStyle(EchoTheme.neoMint)
+                                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+                                            .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous).strokeBorder(EchoTheme.neoMint.opacity(0.45), lineWidth: 1))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(store.isIndexing)
+                                    .help(source.indexingMode == .echoServer
+                                          ? "Sync latest compressed index delta from My Echo Server / .myecho."
+                                          : "Re-scan '\(source.name)' for newly added, modified, or removed audio files.")
+
+                                    Button(role: .destructive) {
+                                        store.removeLibrarySource(source)
+                                    } label: {
+                                        Image(systemName: "trash")
+                                            .font(.system(size: 12.5))
+                                            .padding(8)
+                                            .background(EchoTheme.dangerCoral.opacity(0.15))
+                                            .foregroundStyle(EchoTheme.dangerCoral)
+                                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Remove Source")
                                 }
-                                .buttonStyle(.plain)
-                                .help("Remove Source")
+                                .padding(16)
+                                .background(EchoTheme.surface)
+                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous)
+                                        .strokeBorder(EchoTheme.border, lineWidth: 1)
+                                )
                             }
-                            .padding(16)
-                            .background(EchoTheme.surface)
-                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous)
-                                    .strokeBorder(EchoTheme.border, lineWidth: 1)
-                            )
                         }
                     }
                 }
+                .padding(26)
             }
-            .padding(26)
+
+            // Source Configuration Lightbox Dialog
+            if let src = configuringSource {
+                sourceSettingsLightbox(for: src)
+                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                    .zIndex(50)
+            }
         }
+        .animation(.easeOut(duration: 0.16), value: configuringSourceID != nil)
+        .onAppear {
+            Task { await store.detectEchoServersForSources() }
+        }
+        .onKeyPress(.escape) {
+            if configuringSourceID != nil {
+                configuringSourceID = nil
+                return .handled
+            }
+            return .ignored
+        }
+    }
+
+    @ViewBuilder
+    private func sourceSettingsLightbox(for source: LibrarySource) -> some View {
+        let detected = store.detectedEchoServersBySourceID[source.id]
+        ZStack {
+            Color.black.opacity(0.68)
+                .ignoresSafeArea()
+                .onTapGesture { configuringSourceID = nil }
+
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("VOLUME & INDEXING SETTINGS")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .tracking(1.3)
+                            .foregroundStyle(EchoTheme.neoCyan)
+                        Text(source.name)
+                            .font(.system(size: 20, weight: .black, design: .rounded))
+                            .foregroundStyle(EchoTheme.textPrimary)
+                    }
+                    Spacer()
+                    Button {
+                        configuringSourceID = nil
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12, weight: .bold))
+                            .frame(width: 28, height: 28)
+                            .background(EchoTheme.surfaceElevated)
+                            .foregroundStyle(EchoTheme.textSecondary)
+                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                // Volume Name & Path
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("VOLUME DISPLAY NAME")
+                        .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                        .foregroundStyle(EchoTheme.textMuted)
+                    TextField("Volume Name", text: $draftSourceName)
+                        .textFieldStyle(.roundedBorder)
+                    Text(source.path)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(EchoTheme.textMuted)
+                }
+
+                // Auto-Detected Echo Server Banner
+                if let det = detected {
+                    HStack(spacing: 12) {
+                        Image(systemName: "sparkles")
+                            .foregroundStyle(EchoTheme.neoMint)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Auto-Detected: \(det.serverName) (\(det.detectionMethod == ".myecho" ? ".myecho share index" : "LAN server"))")
+                                .font(.system(size: 12.5, weight: .bold))
+                                .foregroundStyle(EchoTheme.neoMint)
+                            Text("\(det.baseURL.isEmpty ? source.path + "/.myecho" : det.baseURL)\(det.dotMyEchoTrackCount.map { " · \($0) tracks" } ?? "")\(det.dotMyEchoRevision.map { " · Rev #\($0)" } ?? "")")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(EchoTheme.textSecondary)
+                        }
+                        Spacer()
+                        Button("Use Detected") {
+                            draftIndexingMode = .echoServer
+                            if !det.baseURL.isEmpty { draftLANURL = det.baseURL }
+                            draftRemoteLibID = det.libraryID
+                        }
+                        .font(.system(size: 11, weight: .bold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(EchoTheme.neoMint)
+                        .foregroundStyle(Color.black)
+                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                        .buttonStyle(.plain)
+                    }
+                    .padding(10)
+                    .background(EchoTheme.neoMint.opacity(0.10))
+                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                    .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.neoMint.opacity(0.4), lineWidth: 1))
+                }
+
+                // Indexing Mode Picker
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("INDEXING ENGINE FOR THIS VOLUME")
+                        .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                        .foregroundStyle(EchoTheme.textMuted)
+
+                    HStack(spacing: 10) {
+                        modeOptionCard(
+                            title: "Local / Traditional NAS",
+                            subtitle: "Standalone Mac scanning of local folders or SMB/NFS shares.",
+                            icon: "externaldrive.fill",
+                            selected: draftIndexingMode == .localDirect
+                        ) {
+                            draftIndexingMode = .localDirect
+                        }
+
+                        modeOptionCard(
+                            title: "My Echo Server / .myecho",
+                            subtitle: "Reads compressed .myecho shards or fetches deltas from Unraid Docker.",
+                            icon: "server.rack",
+                            selected: draftIndexingMode == .echoServer
+                        ) {
+                            draftIndexingMode = .echoServer
+                        }
+                    }
+                }
+
+                // Echo Server Connection Fields when enabled
+                if draftIndexingMode == .echoServer {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("SERVER LAN URL")
+                                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(EchoTheme.textMuted)
+                                TextField("http://192.168.0.12:48721", text: $draftLANURL)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("TAILSCALE URL (OPTIONAL)")
+                                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(EchoTheme.textMuted)
+                                TextField("http://100.92.217.88:48721", text: $draftTailscaleURL)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+                        }
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("6-DIGIT PAIRING PIN")
+                                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(EchoTheme.textMuted)
+                                TextField("581688", text: $draftPIN)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 130)
+                            }
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("REMOTE LIBRARY ID")
+                                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(EchoTheme.textMuted)
+                                TextField("music", text: $draftRemoteLibID)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 130)
+                            }
+                            Spacer()
+                            Button(store.isTestingEchoServer ? "Testing..." : "Test Connection") {
+                                var cfg = store.echoServerConfig
+                                cfg.isEnabled = true
+                                cfg.lanURL = draftLANURL
+                                cfg.tailscaleURL = draftTailscaleURL
+                                cfg.pairingPIN = draftPIN
+                                cfg.syncSharedState = draftSyncSharedState
+                                store.saveEchoServerConfig(cfg)
+                                Task { await store.testEchoServerConnection() }
+                            }
+                            .font(.system(size: 11.5, weight: .bold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(EchoTheme.surfaceElevated)
+                            .foregroundStyle(EchoTheme.neoCyan)
+                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                            .buttonStyle(.plain)
+                        }
+
+                        Toggle("Sync Playlists, Ratings, Podcasts & Editorial to Echo Server (for Apple TV & Web UI)", isOn: $draftSyncSharedState)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(EchoTheme.textSecondary)
+
+                        Text("Tip: If `.myecho/manifest.json` exists in this share root, compressed shards can be read directly even without a PIN. Adding the PIN enables remote HTTP deltas, Unraid scan triggers & Apple TV shared playlists.")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(EchoTheme.textMuted)
+
+                        if !store.echoServerStatusText.isEmpty {
+                            Text(store.echoServerStatusText)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(EchoTheme.neoMint)
+                        }
+                        if let err = store.echoServerError {
+                            Text(err)
+                                .font(.system(size: 11))
+                                .foregroundStyle(EchoTheme.dangerCoral)
+                        }
+                    }
+                    .padding(12)
+                    .background(EchoTheme.canvas.opacity(0.65))
+                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                }
+
+                // Footer Actions
+                HStack(spacing: 10) {
+                    if draftIndexingMode == .echoServer && store.echoServerConfig.isConfigured {
+                        Button("Trigger Remote Scan") {
+                            Task { await store.triggerRemoteEchoServerScanAndSync(for: source) }
+                        }
+                        .font(.system(size: 12, weight: .semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(EchoTheme.surfaceElevated)
+                        .foregroundStyle(EchoTheme.neoCyan)
+                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                        .buttonStyle(.plain)
+                    }
+                    Spacer()
+                    Button("Cancel") {
+                        configuringSourceID = nil
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(EchoTheme.surfaceElevated)
+                    .foregroundStyle(EchoTheme.textSecondary)
+                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                    .buttonStyle(.plain)
+
+                    Button("Save & Apply") {
+                        store.updateSourceName(source.id, newName: draftSourceName)
+                        if draftIndexingMode == .echoServer {
+                            var cfg = store.echoServerConfig
+                            cfg.isEnabled = !draftLANURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftTailscaleURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            cfg.lanURL = draftLANURL
+                            cfg.tailscaleURL = draftTailscaleURL
+                            cfg.pairingPIN = draftPIN
+                            cfg.syncSharedState = draftSyncSharedState
+                            store.saveEchoServerConfig(cfg)
+                            let libID = draftRemoteLibID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "music" : draftRemoteLibID.trimmingCharacters(in: .whitespacesAndNewlines)
+                            store.linkSourceToEchoServer(source.id, remoteLibraryID: libID)
+                        } else {
+                            store.unlinkSourceFromEchoServer(source.id)
+                        }
+                        configuringSourceID = nil
+                    }
+                    .font(.system(size: 12, weight: .black))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 7)
+                    .background(EchoTheme.neoMint)
+                    .foregroundStyle(Color.black)
+                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(22)
+            .frame(maxWidth: 640)
+            .background(EchoTheme.surface)
+            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous)
+                    .strokeBorder(EchoTheme.borderStrong, lineWidth: 1.2)
+            )
+            .shadow(color: .black.opacity(0.6), radius: 32, y: 12)
+            .padding(24)
+        }
+    }
+
+    private func modeOptionCard(
+        title: String,
+        subtitle: String,
+        icon: String,
+        selected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Image(systemName: icon)
+                        .foregroundStyle(selected ? EchoTheme.neoMint : EchoTheme.textSecondary)
+                    Text(title)
+                        .font(.system(size: 12.5, weight: .bold))
+                        .foregroundStyle(EchoTheme.textPrimary)
+                    Spacer()
+                    Image(systemName: selected ? "checkmark.square.fill" : "square")
+                        .foregroundStyle(selected ? EchoTheme.neoMint : EchoTheme.textMuted)
+                }
+                Text(subtitle)
+                    .font(.system(size: 11))
+                    .foregroundStyle(EchoTheme.textSecondary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(selected ? EchoTheme.neoMint.opacity(0.10) : EchoTheme.surfaceElevated.opacity(0.6))
+            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+            .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(selected ? EchoTheme.neoMint : EchoTheme.border, lineWidth: selected ? 1.5 : 1))
+        }
+        .buttonStyle(.plain)
     }
 }
 
