@@ -1,6 +1,8 @@
 # My Echo — Native macOS & iOS Hi-Fi Music, Podcast & DAP Sync Studio
 
-**My Echo** is a native Swift 6 / SwiftUI macOS studio and Universal iPhone & iPad companion app built for audiophiles, portable Digital Audio Player (DAP) owners, and self-hosted music collectors. It scales effortlessly from a classic offline iTunes-style MP3/DAP sync station all the way up to a NAS-backed multi-device Hi-Fi hub with Wi-Fi iOS syncing, **Navidrome** streaming, **Lidarr** downloading, and a built-in **Party Mode Jukebox** web server for guests.
+**My Echo** is a native Swift 6 / SwiftUI macOS studio and Universal iPhone, iPad & Apple TV companion app built for audiophiles, portable Digital Audio Player (DAP) owners, and self-hosted music collectors. It scales effortlessly from a classic offline iTunes-style MP3/DAP sync station all the way up to a NAS-backed multi-device Hi-Fi hub with Wi-Fi iOS syncing, **Navidrome** streaming, **Lidarr** downloading, a built-in **Party Mode Jukebox** web server, and optional native pairing with the standalone [**My Echo Server**](https://github.com/baardove/my-echo-server) Docker / Unraid companion.
+
+> **Standalone NAS / Unraid Companion Server:** Want 24/7 local NAS delta-indexing, standalone Apple TV streaming without your Mac running, **AI Radio DJ (Google Gemini)**, **DLNA casting**, **Cloudflare Tunnel** remote access, and always-on **Party Mode**? See the dedicated sister repository: [**baardove/my-echo-server**](https://github.com/baardove/my-echo-server).
 
 ---
 
@@ -264,8 +266,14 @@ Crisp **≤ 8px** corner geometry, icon-first controls backed by descriptive too
 - **Broadcast-Processed Voice Intros:** Guests can record short DJ intros from their phone (via an automatic companion local HTTPS/TLS listener) that are EQ'd, compressed, normalized, and ducked smoothly over the start of their requested song.
 
 ### 11. Apple TV (`tvOS/`) Companion App (`MyEchoTV`)
-- **Native Living-Room Client:** Dedicated SwiftUI tvOS companion app (`tvOS/MyEchoTV.xcodeproj`) paired over LAN with My Echo on Mac using a dedicated 6-digit Apple TV PIN (configurable in macOS **Settings**).
-- **Mac Catalog Streaming & Remote Control:** Browse and stream your Mac library on Apple TV, control Mac playback remotely (play/pause, skip, seek, volume), view the live **Party Mode** big-screen dashboard with QR code, connect to **Navidrome**, and listen to **Podcasts**.
+- **Native Living-Room Client:** Dedicated SwiftUI tvOS companion app (`tvOS/MyEchoTV.xcodeproj`) paired over LAN with My Echo on Mac using a dedicated 6-digit Apple TV PIN (configurable in macOS **Settings**), or paired directly with [**My Echo Server**](https://github.com/baardove/my-echo-server) on Unraid/Docker so Apple TV works even when your Mac is off.
+- **Mac & NAS Catalog Streaming & Remote Control:** Browse and stream your library on Apple TV, control Mac playback remotely (play/pause, skip, seek, volume), view the live **Party Mode** big-screen dashboard with QR code, connect to **Navidrome**, and listen to **Podcasts**.
+
+### 12. Standalone NAS / Unraid Companion — [My Echo Server](https://github.com/baardove/my-echo-server)
+The optional self-hosted Go + Docker server has its own dedicated repository at [**github.com/baardove/my-echo-server**](https://github.com/baardove/my-echo-server) (prebuilt multi-arch Docker image `ghcr.io/baardove/my-echo-server:latest` + Unraid template):
+- **Fast Local NAS Delta Indexing:** Indexes Unraid/NAS shares directly off local storage into compressed SQLite + gzip delta shards so My Echo on Mac syncs metadata in milliseconds instead of walking SMB over Wi-Fi, with two-way 1–5 star ratings.
+- **AI Radio DJ & Always-On Party Mode:** Curates fact-grounded Gemini AI radio shows with natural voice bridges, BPM & loudness normalization, drag-and-drop rundown editing, and a 24/7 collaborative Party Mode Jukebox.
+- **DLNA Casting & Remote Access:** Casts live MP3 radio/party streams to LAN DLNA speakers & TVs and includes built-in Cloudflare Tunnel & UPnP/NAT-PMP remote access behind a PIN login gate.
 
 ---
 

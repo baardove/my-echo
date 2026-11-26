@@ -1,5 +1,8 @@
 # My Echo Server (Unraid / Docker Companion)
 
+> **Standalone Repository:** My Echo Server now lives in its own dedicated repository with automated multi-arch Docker builds (`ghcr.io/baardove/my-echo-server:latest`), Unraid Community Applications templates, and full standalone documentation:
+> 👉 [**https://github.com/baardove/my-echo-server**](https://github.com/baardove/my-echo-server)
+
 **My Echo Server** is an optional, lightweight (~45 MB) self-hosted Docker container for Unraid (or any Linux/Docker host) that:
 
 1. **Offloads NAS Indexing:** Scans your Unraid music shares directly off local storage (read-only `/music:ro`) into **partitioned, gzip-compressed NDJSON shards + incremental delta changelogs** so My Echo on Mac fetches only KB-sized changes instead of walking SMB over Wi-Fi.
