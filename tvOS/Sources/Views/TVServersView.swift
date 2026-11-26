@@ -13,14 +13,19 @@ struct TVServersView: View {
                     title: "My Echo Mac · Navidrome · Party TV"
                 )
 
-                // 1. My Echo on Mac (Bonjour + 6-Digit PIN)
+                // 1. My Echo Server (Unraid Docker) or My Echo on Mac (Bonjour + 6-Digit PIN)
                 VStack(alignment: .leading, spacing: 20) {
                     HStack {
-                        Label("My Echo on Mac (Full Library + Remote + Party)", systemImage: "laptopcomputer")
+                        Label(
+                            store.isConnectedToEchoServer
+                                ? "My Echo Server (Unraid Docker · Independent)"
+                                : "My Echo Server (Unraid Docker or Mac)",
+                            systemImage: store.isConnectedToEchoServer ? "server.rack" : "laptopcomputer"
+                        )
                             .font(.system(size: 28, weight: .black))
                             .foregroundStyle(EchoTVTheme.neoMint)
                         Spacer()
-                        Text(store.isConnectedToMac ? "CONNECTED" : "DISCONNECTED")
+                        Text(store.isConnectedToMac ? (store.isConnectedToEchoServer ? "ECHO SERVER" : "MAC CONNECTED") : "DISCONNECTED")
                             .font(.system(size: 16, weight: .black, design: .monospaced))
                             .padding(.horizontal, 14)
                             .padding(.vertical, 6)
@@ -55,7 +60,7 @@ struct TVServersView: View {
                                         .background(EchoTVTheme.surfaceElevated)
                                         .clipShape(RoundedRectangle(cornerRadius: 12))
                                     }
-                                    .buttonStyle(.plain)
+                                    .buttonStyle(EchoTVButtonStyle())
                                 }
                             }
                         }
@@ -95,14 +100,29 @@ struct TVServersView: View {
                                     .foregroundStyle(Color.black)
                                     .clipShape(RoundedRectangle(cornerRadius: 12))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(EchoTVButtonStyle())
+
+                            Button {
+                                store.macServerURL = TVEchoStore.presetUnraidEchoServerTailscaleURL
+                                store.saveMacSettings()
+                                Task { await store.refreshMacCatalog() }
+                            } label: {
+                                Text("Use Unraid Echo Server")
+                                    .font(.system(size: 19, weight: .semibold))
+                                    .padding(.horizontal, 22)
+                                    .padding(.vertical, 14)
+                                    .background(EchoTVTheme.surfaceElevated)
+                                    .foregroundStyle(EchoTVTheme.neoMint)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                            }
+                            .buttonStyle(EchoTVButtonStyle())
 
                             Button {
                                 store.macServerURL = store.macTailscaleURL
                                 store.saveMacSettings()
                                 Task { await store.refreshMacCatalog() }
                             } label: {
-                                Text("Use Tailscale URL")
+                                Text("Use Mac Tailscale URL")
                                     .font(.system(size: 19, weight: .semibold))
                                     .padding(.horizontal, 22)
                                     .padding(.vertical, 14)
@@ -110,7 +130,7 @@ struct TVServersView: View {
                                     .foregroundStyle(EchoTVTheme.neoCyan)
                                     .clipShape(RoundedRectangle(cornerRadius: 12))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(EchoTVButtonStyle())
                         }
 
                         Text(store.macStatusText)
@@ -176,7 +196,7 @@ struct TVServersView: View {
                             .background(selected ? EchoTVTheme.neoCyan : EchoTVTheme.surfaceElevated)
                             .foregroundStyle(selected ? Color.black : EchoTVTheme.textPrimary)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
-                            .buttonStyle(.plain)
+                            .buttonStyle(EchoTVButtonStyle())
                         }
                     }
 
@@ -193,7 +213,7 @@ struct TVServersView: View {
                                 .foregroundStyle(Color.black)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(EchoTVButtonStyle())
 
                         if let status = store.navidromeStatusText {
                             Text(status)
@@ -234,7 +254,7 @@ struct TVServersView: View {
                         .background(EchoTVTheme.partyMagenta)
                         .foregroundStyle(Color.white)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .buttonStyle(.plain)
+                        .buttonStyle(EchoTVButtonStyle())
                     }
                 }
                 .padding(32)
@@ -245,5 +265,10 @@ struct TVServersView: View {
             .padding(.vertical, 40)
         }
         .background(EchoTVTheme.canvas)
+        .onChange(of: store.macServerURL) { _, _ in store.saveMacSettings() }
+        .onChange(of: store.macTailscaleURL) { _, _ in store.saveMacSettings() }
+        .onChange(of: store.pairingPIN) { _, _ in store.saveMacSettings() }
+        .onChange(of: store.standalonePartyURL) { _, _ in store.saveMacSettings() }
+        .onChange(of: store.navidromeConfig) { _, _ in store.saveNavidromeSettings() }
     }
 }

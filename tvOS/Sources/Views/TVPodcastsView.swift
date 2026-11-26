@@ -36,7 +36,7 @@ struct TVPodcastsView: View {
                                 .foregroundStyle(Color.black)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(EchoTVButtonStyle(cornerRadius: 14))
                     }
                     .padding(36)
                     .background(EchoTVTheme.surface)
@@ -115,7 +115,7 @@ struct TVPodcastShowDetailView: View {
                                         .foregroundStyle(Color.black)
                                         .clipShape(RoundedRectangle(cornerRadius: 12))
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(EchoTVButtonStyle(cornerRadius: 14))
                             }
 
                             if !show.feedURL.isEmpty {
@@ -130,7 +130,7 @@ struct TVPodcastShowDetailView: View {
                                         .foregroundStyle(EchoTVTheme.textPrimary)
                                         .clipShape(RoundedRectangle(cornerRadius: 12))
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(EchoTVButtonStyle(cornerRadius: 14))
                             }
                         }
                         .padding(.top, 6)
@@ -185,7 +185,7 @@ struct TVPodcastShowDetailView: View {
                                 .background(EchoTVTheme.surface)
                                 .clipShape(RoundedRectangle(cornerRadius: 14))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(EchoTVButtonStyle(cornerRadius: 14))
                         }
                     }
                 }

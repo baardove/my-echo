@@ -48,7 +48,7 @@ struct TVHomeView: View {
                                 .foregroundStyle(selected ? Color.black : EchoTVTheme.textPrimary)
                                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
                         }
                     }
                 }
@@ -89,13 +89,13 @@ struct TVHomeView: View {
                                 .strokeBorder(EchoTVTheme.partyMagenta.opacity(0.6), lineWidth: 2)
                         )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
                 }
 
                 // Active Now Playing Strip (if playing on Apple TV)
                 if let current = store.player.currentItem {
                     Button {
-                        store.selectedTab = .nowPlaying
+                        store.openNowPlaying()
                     } label: {
                         HStack(spacing: 22) {
                             TVArtworkView(url: current.artworkURL, cornerRadius: 10)
@@ -126,7 +126,7 @@ struct TVHomeView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(EchoTVTheme.neoMint.opacity(0.35), lineWidth: 1.5))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
                 }
 
                 // Main Home Shelves
@@ -173,7 +173,7 @@ struct TVHomeView: View {
                             .foregroundStyle(Color.black)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
 
                     if let first = store.discoveredMacs.first {
                         Button {
@@ -188,7 +188,7 @@ struct TVHomeView: View {
                                 .foregroundStyle(EchoTVTheme.neoCyan)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
                     }
                 }
             }
@@ -286,7 +286,7 @@ struct TVHomeView: View {
                         .foregroundStyle(Color.black)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
             }
             .padding(36)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -308,7 +308,7 @@ struct TVHomeView: View {
                             .background(store.navidromeAlbumListType == kind ? EchoTVTheme.neoCyan : EchoTVTheme.surfaceElevated)
                             .foregroundStyle(store.navidromeAlbumListType == kind ? Color.black : EchoTVTheme.textPrimary)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
-                            .buttonStyle(.plain)
+                            .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
                         }
                     }
                 }
@@ -340,12 +340,14 @@ struct TVLibraryView: View {
     enum Section: String, CaseIterable, Identifiable {
         case albums = "Albums"
         case artists = "Artists"
+        case tracks = "Tracks"
         case playlists = "Playlists"
         var id: String { rawValue }
     }
 
     @Environment(TVEchoStore.self) private var store
     @State private var section: Section = .albums
+    @State private var trackSearchQuery: String = ""
     @State private var selectedMacAlbum: TVAlbumGroup?
     @State private var selectedMacArtist: TVArtistGroup?
     @State private var selectedMacPlaylist: TVPlaylist?
@@ -360,21 +362,40 @@ struct TVLibraryView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 32) {
-                HStack(spacing: 18) {
+                HStack(spacing: 14) {
                     ForEach(Section.allCases) { s in
-                        Button(s.rawValue) {
+                        let countLabel: String = {
+                            if store.activeSource == .mac {
+                                switch s {
+                                case .albums: return "Albums (\(store.albums.count))"
+                                case .artists: return "Artists (\(store.artists.count))"
+                                case .tracks: return "Tracks (\(store.tracks.count))"
+                                case .playlists: return "Playlists (\(store.playlists.count))"
+                                }
+                            } else {
+                                switch s {
+                                case .albums: return "Albums (\(store.navidromeAlbums.count))"
+                                case .artists: return "Artists (\(store.navidromeArtists.count))"
+                                case .tracks: return "Tracks"
+                                case .playlists: return "Playlists (\(store.navidromePlaylists.count))"
+                                }
+                            }
+                        }()
+                        Button(countLabel) {
                             section = s
                         }
-                        .font(.system(size: 22, weight: .bold))
-                        .padding(.horizontal, 26)
+                        .font(.system(size: 20, weight: .bold))
+                        .padding(.horizontal, 20)
                         .padding(.vertical, 12)
                         .background(section == s ? EchoTVTheme.neoMint : EchoTVTheme.surfaceElevated)
                         .foregroundStyle(section == s ? Color.black : EchoTVTheme.textPrimary)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .buttonStyle(.plain)
+                        .buttonStyle(EchoTVButtonStyle(cornerRadius: 10))
                     }
 
-                    Spacer()
+                    Divider()
+                        .frame(height: 28)
+                        .background(EchoTVTheme.borderStrong)
 
                     ForEach(TVLibrarySource.allCases) { src in
                         Button(src.rawValue) {
@@ -383,14 +404,18 @@ struct TVLibraryView: View {
                                 Task { await store.refreshNavidromeHome() }
                             }
                         }
-                        .font(.system(size: 18, weight: .bold))
-                        .padding(.horizontal, 18)
+                        .font(.system(size: 17, weight: .bold))
+                        .padding(.horizontal, 16)
                         .padding(.vertical, 10)
                         .background(store.activeSource == src ? EchoTVTheme.neoCyan : EchoTVTheme.surface)
                         .foregroundStyle(store.activeSource == src ? Color.black : EchoTVTheme.textSecondary)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .buttonStyle(.plain)
+                        .buttonStyle(EchoTVButtonStyle(cornerRadius: 8, accent: EchoTVTheme.neoCyan))
                     }
+
+                    Spacer()
+
+                    TVLibraryModeToggle()
                 }
 
                 if store.activeSource == .mac {
@@ -452,38 +477,292 @@ struct TVLibraryView: View {
                 }
             }
 
+        case .tracks:
+            macTracksSection
+
         case .playlists:
-            LazyVStack(spacing: 16) {
-                ForEach(store.playlists) { pl in
-                    let count = store.tracks(for: pl).count
+            if store.playlists.isEmpty {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("No Mac Playlists Loaded Yet")
+                        .font(.system(size: 30, weight: .bold))
+                        .foregroundStyle(EchoTVTheme.textPrimary)
+                    Text("Playlists from My Echo on Mac appear here automatically once your Mac library is loaded.")
+                        .font(.system(size: 20))
+                        .foregroundStyle(EchoTVTheme.textSecondary)
                     Button {
-                        selectedMacPlaylist = pl
+                        Task { await store.refreshMacCatalog() }
                     } label: {
-                        HStack(spacing: 22) {
-                            let artHash = store.tracks(for: pl).compactMap(\.artworkHash).first
-                            TVArtworkView(url: store.macArtworkURL(for: artHash), cornerRadius: 10, fallbackIcon: "music.note.list")
-                                .frame(width: 84, height: 84)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(pl.name)
-                                    .font(.system(size: 26, weight: .bold))
-                                    .foregroundStyle(EchoTVTheme.textPrimary)
-                                if !pl.description.isEmpty {
-                                    Text(pl.description)
-                                        .font(.system(size: 18))
+                        Label("Refresh Mac Library & Playlists", systemImage: "arrow.clockwise")
+                            .font(.system(size: 20, weight: .bold))
+                            .padding(.horizontal, 26)
+                            .padding(.vertical, 14)
+                            .background(EchoTVTheme.neoMint)
+                            .foregroundStyle(Color.black)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
+                }
+                .padding(34)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(EchoTVTheme.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 18))
+            } else {
+                LazyVStack(spacing: 16) {
+                    ForEach(store.playlists) { pl in
+                        let plTracks = store.tracks(for: pl)
+                        let artHash = plTracks.compactMap(\.artworkHash).first
+                        HStack(spacing: 18) {
+                            Button {
+                                selectedMacPlaylist = pl
+                            } label: {
+                                HStack(spacing: 22) {
+                                    TVArtworkView(url: store.macArtworkURL(for: artHash), cornerRadius: 10, fallbackIcon: "music.note.list")
+                                        .frame(width: 88, height: 88)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(pl.name)
+                                            .font(.system(size: 26, weight: .bold))
+                                            .foregroundStyle(EchoTVTheme.textPrimary)
+                                        if !pl.description.isEmpty {
+                                            Text(pl.description)
+                                                .font(.system(size: 18))
+                                                .foregroundStyle(EchoTVTheme.textSecondary)
+                                                .lineLimit(1)
+                                        }
+                                        Text("\(plTracks.count) tracks · Mac Playlist")
+                                            .font(.system(size: 17, weight: .semibold, design: .monospaced))
+                                            .foregroundStyle(EchoTVTheme.neoMint)
+                                    }
+                                    Spacer()
+                                }
+                                .padding(18)
+                                .background(EchoTVTheme.surface)
+                                .clipShape(RoundedRectangle(cornerRadius: 14))
+                            }
+                            .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
+
+                            Button {
+                                if store.libraryTapMode == .addToQueue {
+                                    store.enqueueMacTracks(plTracks, label: pl.name)
+                                } else {
+                                    store.playMacPlaylist(pl, startingAt: 0)
+                                }
+                            } label: {
+                                Label(
+                                    store.libraryTapMode == .addToQueue ? "Queue All" : "Play on TV",
+                                    systemImage: store.libraryTapMode == .addToQueue ? "text.badge.plus" : "play.fill"
+                                )
+                                    .font(.system(size: 19, weight: .bold))
+                                    .padding(.horizontal, 22)
+                                    .padding(.vertical, 18)
+                                    .background(store.libraryTapMode == .addToQueue ? EchoTVTheme.neoCyan : EchoTVTheme.neoMint)
+                                    .foregroundStyle(Color.black)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                            }
+                            .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
+
+                            Button {
+                                Task { await store.sendRemoteCommand("playPlaylist", playlistID: pl.id) }
+                            } label: {
+                                Label("Play on Mac", systemImage: "desktopcomputer")
+                                    .font(.system(size: 18, weight: .bold))
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 18)
+                                    .background(EchoTVTheme.surfaceElevated)
+                                    .foregroundStyle(EchoTVTheme.neoCyan)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                            }
+                            .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var macTracksSection: some View {
+        let trimmed = trackSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let matchingTracks: [TVTrack] = {
+            if trimmed.isEmpty {
+                return Array(store.tracks.prefix(150))
+            }
+            return Array(store.tracks.filter {
+                $0.title.lowercased().contains(trimmed)
+                    || $0.artist.lowercased().contains(trimmed)
+                    || $0.album.lowercased().contains(trimmed)
+                    || $0.albumArtist.lowercased().contains(trimmed)
+            }.prefix(200))
+        }()
+
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(spacing: 16) {
+                TextField("Search tracks by title, artist, or album...", text: $trackSearchQuery)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
+                if !trackSearchQuery.isEmpty {
+                    Button("Clear") {
+                        trackSearchQuery = ""
+                    }
+                    .font(.system(size: 18, weight: .bold))
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .background(EchoTVTheme.surfaceElevated)
+                    .foregroundStyle(EchoTVTheme.textPrimary)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .buttonStyle(EchoTVButtonStyle(cornerRadius: 10))
+                }
+
+                Text(trimmed.isEmpty
+                     ? "Showing \(matchingTracks.count) of \(store.tracks.count) tracks"
+                     : "\(matchingTracks.count) matches")
+                    .font(.system(size: 17, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(EchoTVTheme.textMuted)
+            }
+
+            if matchingTracks.isEmpty {
+                Text(store.tracks.isEmpty ? "No tracks loaded yet — connect to My Echo on Mac in Servers." : "No tracks match \"\(trackSearchQuery)\".")
+                    .font(.system(size: 22))
+                    .foregroundStyle(EchoTVTheme.textSecondary)
+                    .padding(28)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(EchoTVTheme.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+            } else {
+                LazyVStack(spacing: 10) {
+                    ForEach(Array(matchingTracks.enumerated()), id: \.element.id) { idx, track in
+                        Button {
+                            store.handleMacTrackTap(in: matchingTracks, at: idx)
+                        } label: {
+                            HStack(spacing: 18) {
+                                TVArtworkView(url: store.macArtworkURL(for: track.artworkHash), cornerRadius: 8)
+                                    .frame(width: 60, height: 60)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(track.title)
+                                        .font(.system(size: 22, weight: .bold))
+                                        .foregroundStyle(EchoTVTheme.textPrimary)
+                                        .lineLimit(1)
+                                    Text("\(track.artist) · \(track.effectiveAlbum)")
+                                        .font(.system(size: 17))
                                         .foregroundStyle(EchoTVTheme.textSecondary)
                                         .lineLimit(1)
                                 }
+                                Spacer()
+                                if store.libraryTapMode == .addToQueue {
+                                    Label("ADD TO QUEUE", systemImage: "text.badge.plus")
+                                        .font(.system(size: 13, weight: .black, design: .monospaced))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(EchoTVTheme.neoCyan.opacity(0.18))
+                                        .foregroundStyle(EchoTVTheme.neoCyan)
+                                        .clipShape(Capsule())
+                                }
+                                Text(track.formatPrimaryLabel)
+                                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(track.isHiRes ? EchoTVTheme.hiResGold : EchoTVTheme.neoMint)
+                                Text(TVFormatters.duration(track.duration))
+                                    .font(.system(size: 18, design: .monospaced))
+                                    .foregroundStyle(EchoTVTheme.textMuted)
+                                    .frame(width: 84, alignment: .trailing)
                             }
-                            Spacer()
-                            Text("\(count) tracks")
-                                .font(.system(size: 19, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(EchoTVTheme.neoMint)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 12)
+                            .background(EchoTVTheme.surface)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
-                        .padding(20)
-                        .background(EchoTVTheme.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
                     }
-                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var navidromeTracksSection: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(spacing: 16) {
+                TextField("Search Navidrome tracks by title, artist, or album...", text: $trackSearchQuery)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .onChange(of: trackSearchQuery) { _, newValue in
+                        if store.activeSource == .navidrome {
+                            store.triggerNavidromeSearch(query: newValue)
+                        }
+                    }
+
+                if !trackSearchQuery.isEmpty {
+                    Button("Clear") {
+                        trackSearchQuery = ""
+                        store.triggerNavidromeSearch(query: "")
+                    }
+                    .font(.system(size: 18, weight: .bold))
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .background(EchoTVTheme.surfaceElevated)
+                    .foregroundStyle(EchoTVTheme.textPrimary)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .buttonStyle(EchoTVButtonStyle(cornerRadius: 10, accent: EchoTVTheme.neoCyan))
+                }
+            }
+
+            if trackSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text("Type or dictate a song, artist, or album above to search Navidrome tracks.")
+                    .font(.system(size: 22))
+                    .foregroundStyle(EchoTVTheme.textSecondary)
+                    .padding(28)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(EchoTVTheme.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+            } else if store.isSearchingNavidrome {
+                ProgressView("Searching Navidrome tracks...")
+            } else if store.navidromeSearchSongs.isEmpty {
+                Text("No Navidrome tracks match \"\(trackSearchQuery)\".")
+                    .font(.system(size: 22))
+                    .foregroundStyle(EchoTVTheme.textSecondary)
+                    .padding(28)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(EchoTVTheme.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+            } else {
+                LazyVStack(spacing: 10) {
+                    ForEach(Array(store.navidromeSearchSongs.enumerated()), id: \.element.id) { idx, song in
+                        Button {
+                            store.handleNavidromeSongTap(in: store.navidromeSearchSongs, at: idx)
+                        } label: {
+                            HStack(spacing: 18) {
+                                TVArtworkView(url: store.navidromeArtworkURL(for: song.coverArt), cornerRadius: 8)
+                                    .frame(width: 60, height: 60)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(song.title)
+                                        .font(.system(size: 22, weight: .bold))
+                                        .foregroundStyle(EchoTVTheme.textPrimary)
+                                        .lineLimit(1)
+                                    Text("\(song.artist) · \(song.album)")
+                                        .font(.system(size: 17))
+                                        .foregroundStyle(EchoTVTheme.textSecondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                if store.libraryTapMode == .addToQueue {
+                                    Label("ADD TO QUEUE", systemImage: "text.badge.plus")
+                                        .font(.system(size: 13, weight: .black, design: .monospaced))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(EchoTVTheme.neoCyan.opacity(0.18))
+                                        .foregroundStyle(EchoTVTheme.neoCyan)
+                                        .clipShape(Capsule())
+                                }
+                                Text(TVFormatters.duration(TimeInterval(song.duration)))
+                                    .font(.system(size: 18, design: .monospaced))
+                                    .foregroundStyle(EchoTVTheme.neoCyan)
+                            }
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 12)
+                            .background(EchoTVTheme.surface)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                        .buttonStyle(EchoTVButtonStyle(cornerRadius: 12, accent: EchoTVTheme.neoCyan))
+                    }
                 }
             }
         }
@@ -526,9 +805,12 @@ struct TVLibraryView: View {
                         .background(EchoTVTheme.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
                 }
             }
+
+        case .tracks:
+            navidromeTracksSection
 
         case .playlists:
             LazyVStack(spacing: 14) {
@@ -550,7 +832,7 @@ struct TVLibraryView: View {
                         .background(EchoTVTheme.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
                 }
             }
         }
@@ -599,17 +881,24 @@ struct TVMacAlbumDetailView: View {
 
                         HStack(spacing: 18) {
                             Button {
-                                store.playMacAlbum(album, startingAt: 0)
+                                if store.libraryTapMode == .addToQueue {
+                                    store.enqueueMacTracks(album.tracks, label: album.title)
+                                } else {
+                                    store.playMacAlbum(album, startingAt: 0)
+                                }
                             } label: {
-                                Label("Play on Apple TV", systemImage: "play.fill")
+                                Label(
+                                    store.libraryTapMode == .addToQueue ? "Add Album to Queue" : "Play on Apple TV",
+                                    systemImage: store.libraryTapMode == .addToQueue ? "text.badge.plus" : "play.fill"
+                                )
                                     .font(.system(size: 22, weight: .bold))
                                     .padding(.horizontal, 28)
                                     .padding(.vertical, 14)
-                                    .background(EchoTVTheme.neoMint)
+                                    .background(store.libraryTapMode == .addToQueue ? EchoTVTheme.neoCyan : EchoTVTheme.neoMint)
                                     .foregroundStyle(Color.black)
                                     .clipShape(RoundedRectangle(cornerRadius: 12))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
 
                             Button {
                                 Task {
@@ -624,7 +913,11 @@ struct TVMacAlbumDetailView: View {
                                     .foregroundStyle(EchoTVTheme.neoCyan)
                                     .clipShape(RoundedRectangle(cornerRadius: 12))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
+
+                            Spacer()
+
+                            TVLibraryModeToggle()
                         }
                         .padding(.top, 8)
 
@@ -637,13 +930,13 @@ struct TVMacAlbumDetailView: View {
                                 .padding(.top, 8)
                         }
                     }
-                    Spacer()
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 LazyVStack(spacing: 12) {
                     ForEach(Array(album.tracks.enumerated()), id: \.element.id) { idx, track in
                         Button {
-                            store.playMacAlbum(album, startingAt: idx)
+                            store.handleMacTrackTap(in: album.tracks, at: idx)
                         } label: {
                             HStack(spacing: 20) {
                                 Text(track.trackNumber.map { String(format: "%02d", $0) } ?? String(format: "%02d", idx + 1))
@@ -664,6 +957,16 @@ struct TVMacAlbumDetailView: View {
 
                                 Spacer()
 
+                                if store.libraryTapMode == .addToQueue {
+                                    Label("ADD TO QUEUE", systemImage: "text.badge.plus")
+                                        .font(.system(size: 13, weight: .black, design: .monospaced))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(EchoTVTheme.neoCyan.opacity(0.18))
+                                        .foregroundStyle(EchoTVTheme.neoCyan)
+                                        .clipShape(Capsule())
+                                }
+
                                 Text(track.formatPrimaryLabel)
                                     .font(.system(size: 15, weight: .bold, design: .monospaced))
                                     .foregroundStyle(track.isHiRes ? EchoTVTheme.hiResGold : EchoTVTheme.neoMint)
@@ -678,7 +981,7 @@ struct TVMacAlbumDetailView: View {
                             .background(EchoTVTheme.surface)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
                     }
                 }
             }
@@ -748,17 +1051,37 @@ struct TVMacPlaylistDetailView: View {
 
                 HStack(spacing: 18) {
                     Button {
-                        store.playMacPlaylist(playlist, startingAt: 0)
+                        if store.libraryTapMode == .addToQueue {
+                            store.enqueueMacTracks(plTracks, label: playlist.name)
+                        } else {
+                            store.playMacPlaylist(playlist, startingAt: 0)
+                        }
                     } label: {
-                        Label("Play on Apple TV", systemImage: "play.fill")
+                        Label(
+                            store.libraryTapMode == .addToQueue ? "Add Playlist to Queue" : "Play on Apple TV",
+                            systemImage: store.libraryTapMode == .addToQueue ? "text.badge.plus" : "play.fill"
+                        )
                             .font(.system(size: 22, weight: .bold))
                             .padding(.horizontal, 28)
                             .padding(.vertical, 14)
-                            .background(EchoTVTheme.neoMint)
+                            .background(store.libraryTapMode == .addToQueue ? EchoTVTheme.neoCyan : EchoTVTheme.neoMint)
                             .foregroundStyle(Color.black)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
+
+                    Button {
+                        store.playMacPlaylistShuffled(playlist)
+                    } label: {
+                        Label("Shuffle on TV", systemImage: "shuffle")
+                            .font(.system(size: 20, weight: .bold))
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 14)
+                            .background(EchoTVTheme.surfaceElevated)
+                            .foregroundStyle(EchoTVTheme.neoMint)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
 
                     Button {
                         Task {
@@ -773,13 +1096,17 @@ struct TVMacPlaylistDetailView: View {
                             .foregroundStyle(EchoTVTheme.neoCyan)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
+
+                    Spacer()
+
+                    TVLibraryModeToggle()
                 }
 
                 LazyVStack(spacing: 12) {
                     ForEach(Array(plTracks.enumerated()), id: \.element.id) { idx, track in
                         Button {
-                            store.playMacPlaylist(playlist, startingAt: idx)
+                            store.handleMacTrackTap(in: plTracks, at: idx)
                         } label: {
                             HStack(spacing: 18) {
                                 TVArtworkView(url: store.macArtworkURL(for: track.artworkHash), cornerRadius: 8)
@@ -793,6 +1120,15 @@ struct TVMacPlaylistDetailView: View {
                                         .foregroundStyle(EchoTVTheme.textSecondary)
                                 }
                                 Spacer()
+                                if store.libraryTapMode == .addToQueue {
+                                    Label("ADD TO QUEUE", systemImage: "text.badge.plus")
+                                        .font(.system(size: 13, weight: .black, design: .monospaced))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(EchoTVTheme.neoCyan.opacity(0.18))
+                                        .foregroundStyle(EchoTVTheme.neoCyan)
+                                        .clipShape(Capsule())
+                                }
                                 Text(TVFormatters.duration(track.duration))
                                     .font(.system(size: 18, design: .monospaced))
                                     .foregroundStyle(EchoTVTheme.textMuted)
@@ -802,7 +1138,7 @@ struct TVMacPlaylistDetailView: View {
                             .background(EchoTVTheme.surface)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
                     }
                 }
             }
@@ -838,21 +1174,34 @@ struct TVNavidromeAlbumDetailView: View {
                             .font(.system(size: 26, weight: .semibold))
                             .foregroundStyle(EchoTVTheme.textSecondary)
 
-                        Button {
-                            store.playNavidromeSongs(songs, startingAt: 0)
-                        } label: {
-                            Label("Play Album", systemImage: "play.fill")
-                                .font(.system(size: 22, weight: .bold))
-                                .padding(.horizontal, 28)
-                                .padding(.vertical, 14)
-                                .background(EchoTVTheme.neoCyan)
-                                .foregroundStyle(Color.black)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        HStack(spacing: 18) {
+                            Button {
+                                if store.libraryTapMode == .addToQueue {
+                                    store.enqueueNavidromeSongs(songs, label: album.name)
+                                } else {
+                                    store.playNavidromeSongs(songs, startingAt: 0)
+                                }
+                            } label: {
+                                Label(
+                                    store.libraryTapMode == .addToQueue ? "Add Album to Queue" : "Play Album",
+                                    systemImage: store.libraryTapMode == .addToQueue ? "text.badge.plus" : "play.fill"
+                                )
+                                    .font(.system(size: 22, weight: .bold))
+                                    .padding(.horizontal, 28)
+                                    .padding(.vertical, 14)
+                                    .background(EchoTVTheme.neoCyan)
+                                    .foregroundStyle(Color.black)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                            }
+                            .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
+                            .disabled(songs.isEmpty)
+
+                            Spacer()
+
+                            TVLibraryModeToggle()
                         }
-                        .buttonStyle(.plain)
-                        .disabled(songs.isEmpty)
                     }
-                    Spacer()
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 if isLoading {
@@ -861,7 +1210,7 @@ struct TVNavidromeAlbumDetailView: View {
                     LazyVStack(spacing: 12) {
                         ForEach(Array(songs.enumerated()), id: \.element.id) { idx, song in
                             Button {
-                                store.playNavidromeSongs(songs, startingAt: idx)
+                                store.handleNavidromeSongTap(in: songs, at: idx)
                             } label: {
                                 HStack(spacing: 18) {
                                     Text(song.track.map { String(format: "%02d", $0) } ?? String(format: "%02d", idx + 1))
@@ -877,6 +1226,15 @@ struct TVNavidromeAlbumDetailView: View {
                                             .foregroundStyle(EchoTVTheme.textSecondary)
                                     }
                                     Spacer()
+                                    if store.libraryTapMode == .addToQueue {
+                                        Label("ADD TO QUEUE", systemImage: "text.badge.plus")
+                                            .font(.system(size: 13, weight: .black, design: .monospaced))
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 6)
+                                            .background(EchoTVTheme.neoCyan.opacity(0.18))
+                                            .foregroundStyle(EchoTVTheme.neoCyan)
+                                            .clipShape(Capsule())
+                                    }
                                     if let suffix = song.suffix {
                                         Text(suffix.uppercased())
                                             .font(.system(size: 15, weight: .bold, design: .monospaced))
@@ -891,7 +1249,7 @@ struct TVNavidromeAlbumDetailView: View {
                                 .background(EchoTVTheme.surface)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
                         }
                     }
                 }
@@ -951,24 +1309,37 @@ struct TVNavidromePlaylistDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 TVSectionHeader(eyebrow: "Navidrome Playlist", title: playlist.name, trailing: "\(songs.count) Songs")
-                Button {
-                    store.playNavidromeSongs(songs, startingAt: 0)
-                } label: {
-                    Label("Play Playlist", systemImage: "play.fill")
-                        .font(.system(size: 22, weight: .bold))
-                        .padding(.horizontal, 28)
-                        .padding(.vertical, 14)
-                        .background(EchoTVTheme.neoCyan)
-                        .foregroundStyle(Color.black)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                HStack(spacing: 18) {
+                    Button {
+                        if store.libraryTapMode == .addToQueue {
+                            store.enqueueNavidromeSongs(songs, label: playlist.name)
+                        } else {
+                            store.playNavidromeSongs(songs, startingAt: 0)
+                        }
+                    } label: {
+                        Label(
+                            store.libraryTapMode == .addToQueue ? "Add Playlist to Queue" : "Play Playlist",
+                            systemImage: store.libraryTapMode == .addToQueue ? "text.badge.plus" : "play.fill"
+                        )
+                            .font(.system(size: 22, weight: .bold))
+                            .padding(.horizontal, 28)
+                            .padding(.vertical, 14)
+                            .background(EchoTVTheme.neoCyan)
+                            .foregroundStyle(Color.black)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
+                    .disabled(songs.isEmpty)
+
+                    Spacer()
+
+                    TVLibraryModeToggle()
                 }
-                .buttonStyle(.plain)
-                .disabled(songs.isEmpty)
 
                 LazyVStack(spacing: 12) {
                     ForEach(Array(songs.enumerated()), id: \.element.id) { idx, song in
                         Button {
-                            store.playNavidromeSongs(songs, startingAt: idx)
+                            store.handleNavidromeSongTap(in: songs, at: idx)
                         } label: {
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
@@ -980,6 +1351,15 @@ struct TVNavidromePlaylistDetailView: View {
                                         .foregroundStyle(EchoTVTheme.textSecondary)
                                 }
                                 Spacer()
+                                if store.libraryTapMode == .addToQueue {
+                                    Label("ADD TO QUEUE", systemImage: "text.badge.plus")
+                                        .font(.system(size: 13, weight: .black, design: .monospaced))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(EchoTVTheme.neoCyan.opacity(0.18))
+                                        .foregroundStyle(EchoTVTheme.neoCyan)
+                                        .clipShape(Capsule())
+                                }
                                 Text(TVFormatters.duration(TimeInterval(song.duration)))
                                     .font(.system(size: 18, design: .monospaced))
                                     .foregroundStyle(EchoTVTheme.textMuted)
@@ -989,7 +1369,7 @@ struct TVNavidromePlaylistDetailView: View {
                             .background(EchoTVTheme.surface)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
                     }
                 }
             }
@@ -1055,7 +1435,7 @@ struct TVSearchView: View {
                             LazyVStack(spacing: 10) {
                                 ForEach(Array(macTracks.enumerated()), id: \.element.id) { idx, track in
                                     Button {
-                                        store.playMacTracks(macTracks, startingAt: idx)
+                                        store.handleMacTrackTap(in: macTracks, at: idx)
                                     } label: {
                                         HStack(spacing: 18) {
                                             TVArtworkView(url: store.macArtworkURL(for: track.artworkHash), cornerRadius: 8)
@@ -1077,7 +1457,7 @@ struct TVSearchView: View {
                                         .background(EchoTVTheme.surface)
                                         .clipShape(RoundedRectangle(cornerRadius: 12))
                                     }
-                                    .buttonStyle(.plain)
+                                    .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
                                 }
                             }
                         }
@@ -1110,7 +1490,7 @@ struct TVSearchView: View {
                             LazyVStack(spacing: 10) {
                                 ForEach(Array(store.navidromeSearchSongs.enumerated()), id: \.element.id) { idx, song in
                                     Button {
-                                        store.playNavidromeSongs(store.navidromeSearchSongs, startingAt: idx)
+                                        store.handleNavidromeSongTap(in: store.navidromeSearchSongs, at: idx)
                                     } label: {
                                         HStack {
                                             VStack(alignment: .leading, spacing: 2) {
@@ -1130,7 +1510,7 @@ struct TVSearchView: View {
                                         .background(EchoTVTheme.surface)
                                         .clipShape(RoundedRectangle(cornerRadius: 12))
                                     }
-                                    .buttonStyle(.plain)
+                                    .buttonStyle(EchoTVButtonStyle(cornerRadius: 12))
                                 }
                             }
                         }

@@ -30,7 +30,11 @@ struct TVMacRemoteView: View {
                         }
 
                         HStack(spacing: 32) {
-                            TVArtworkView(url: store.macArtworkURL(for: state.currentTrack?.artworkHash), cornerRadius: 18)
+                            TVArtworkView(
+                                url: store.macArtworkURL(for: state.currentTrack?.artworkHash),
+                                cornerRadius: 18,
+                                preservePreviousWhileLoading: true
+                            )
                                 .frame(width: 280, height: 280)
 
                             VStack(alignment: .leading, spacing: 10) {
@@ -96,7 +100,7 @@ struct TVMacRemoteView: View {
                                     .foregroundStyle(Color.black)
                                     .clipShape(RoundedRectangle(cornerRadius: 16))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(EchoTVButtonStyle(cornerRadius: 14, accent: EchoTVTheme.neoCyan))
                             remoteButton(icon: "goforward.15", label: "+15s") {
                                 await store.sendRemoteCommand("seek", seconds: min(state.duration, state.currentTime + 15))
                             }
@@ -150,7 +154,7 @@ struct TVMacRemoteView: View {
                                 .foregroundStyle(state.partyStatus.isLive ? EchoTVTheme.dangerCoral : EchoTVTheme.partyMagenta)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(EchoTVButtonStyle(cornerRadius: 14, accent: EchoTVTheme.neoCyan))
 
                             if state.partyStatus.isLive {
                                 Button {
@@ -164,7 +168,7 @@ struct TVMacRemoteView: View {
                                         .foregroundStyle(Color.black)
                                         .clipShape(RoundedRectangle(cornerRadius: 12))
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(EchoTVButtonStyle(cornerRadius: 14, accent: EchoTVTheme.neoCyan))
                             }
                         }
                     }
@@ -217,7 +221,7 @@ struct TVMacRemoteView: View {
                                             .background(isCurrent ? EchoTVTheme.neoCyan.opacity(0.16) : EchoTVTheme.surface)
                                             .clipShape(RoundedRectangle(cornerRadius: 12))
                                         }
-                                        .buttonStyle(.plain)
+                                        .buttonStyle(EchoTVButtonStyle(cornerRadius: 14, accent: EchoTVTheme.neoCyan))
                                     }
                                 }
                             }
@@ -256,7 +260,7 @@ struct TVMacRemoteView: View {
                             .foregroundStyle(Color.black)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(EchoTVButtonStyle(cornerRadius: 14, accent: EchoTVTheme.neoCyan))
                 }
             }
         }
@@ -279,6 +283,6 @@ struct TVMacRemoteView: View {
             .foregroundStyle(active ? EchoTVTheme.neoCyan : EchoTVTheme.textPrimary)
             .clipShape(RoundedRectangle(cornerRadius: 14))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(EchoTVButtonStyle(cornerRadius: 14, accent: EchoTVTheme.neoCyan))
     }
 }

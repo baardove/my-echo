@@ -1,28 +1,97 @@
 import SwiftUI
+import UIKit
+
+@MainActor
+final class TVImageCache {
+    static let shared = TVImageCache()
+
+    private let cache: NSCache<NSURL, UIImage> = {
+        let c = NSCache<NSURL, UIImage>()
+        c.countLimit = 250
+        c.totalCostLimit = 80 * 1024 * 1024
+        return c
+    }()
+
+    private let session: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.requestCachePolicy = .returnCacheDataElseLoad
+        cfg.urlCache = URLCache(
+            memoryCapacity: 40 * 1024 * 1024,
+            diskCapacity: 150 * 1024 * 1024
+        )
+        cfg.timeoutIntervalForRequest = 15
+        return URLSession(configuration: cfg)
+    }()
+
+    private var inFlight: [URL: Task<UIImage?, Never>] = [:]
+
+    func cachedImage(for url: URL?) -> UIImage? {
+        guard let url else { return nil }
+        return cache.object(forKey: url as NSURL)
+    }
+
+    func loadImage(for url: URL) async -> UIImage? {
+        if let cached = cache.object(forKey: url as NSURL) {
+            return cached
+        }
+        if let existing = inFlight[url] {
+            return await existing.value
+        }
+
+        let urlSession = session
+        let task = Task<UIImage?, Never> {
+            do {
+                let (data, response) = try await urlSession.data(from: url)
+                if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                    return nil
+                }
+                return await Task.detached(priority: .userInitiated) {
+                    UIImage(data: data)
+                }.value
+            } catch {
+                return nil
+            }
+        }
+        inFlight[url] = task
+        let image = await task.value
+        inFlight[url] = nil
+        if let image {
+            let cost = Int(image.size.width * image.size.height * image.scale * image.scale * 4)
+            cache.setObject(image, forKey: url as NSURL, cost: max(1, cost))
+        }
+        return image
+    }
+}
 
 struct TVArtworkView: View {
     let url: URL?
     var cornerRadius: CGFloat = EchoTVTheme.radiusCard
     var fallbackIcon: String = "music.note"
+    var preservePreviousWhileLoading: Bool = false
+
+    @State private var loadedImage: UIImage?
+    @State private var loadedURL: URL?
 
     var body: some View {
+        let displayImage: UIImage? = {
+            if let cached = TVImageCache.shared.cachedImage(for: url) {
+                return cached
+            }
+            if url == nil {
+                return nil
+            }
+            if loadedURL == url {
+                return loadedImage
+            }
+            return preservePreviousWhileLoading ? loadedImage : nil
+        }()
+
         ZStack {
             EchoTVTheme.surfaceElevated
-            if let url {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    case .empty:
-                        placeholder
-                    case .failure:
-                        placeholder
-                    @unknown default:
-                        placeholder
-                    }
-                }
+            if let displayImage {
+                Image(uiImage: displayImage)
+                    .resizable()
+                    .scaledToFill()
             } else {
                 placeholder
             }
@@ -32,6 +101,27 @@ struct TVArtworkView: View {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .strokeBorder(EchoTVTheme.border, lineWidth: 1)
         )
+        .task(id: url) {
+            guard let url else {
+                loadedImage = nil
+                loadedURL = nil
+                return
+            }
+            if let cached = TVImageCache.shared.cachedImage(for: url) {
+                loadedImage = cached
+                loadedURL = url
+                return
+            }
+            let fetched = await TVImageCache.shared.loadImage(for: url)
+            guard !Task.isCancelled else { return }
+            if let fetched {
+                loadedImage = fetched
+                loadedURL = url
+            } else if !preservePreviousWhileLoading {
+                loadedImage = nil
+                loadedURL = url
+            }
+        }
     }
 
     private var placeholder: some View {
@@ -44,6 +134,52 @@ struct TVArtworkView: View {
             Image(systemName: fallbackIcon)
                 .font(.system(size: 44, weight: .semibold))
                 .foregroundStyle(EchoTVTheme.neoMint.opacity(0.65))
+        }
+    }
+}
+
+struct TVBackdropArtworkView: View {
+    let url: URL?
+    var opacity: Double = 0.28
+
+    @State private var loadedImage: UIImage?
+
+    var body: some View {
+        let displayImage = TVImageCache.shared.cachedImage(for: url) ?? (url == nil ? nil : loadedImage)
+
+        ZStack {
+            EchoTVTheme.canvas
+            if let displayImage {
+                GeometryReader { bgGeo in
+                    Image(uiImage: displayImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: bgGeo.size.width, height: bgGeo.size.height)
+                        .clipped()
+                        .blur(radius: 90)
+                        .opacity(opacity)
+                }
+            }
+        }
+        .ignoresSafeArea()
+        .task(id: url) {
+            guard let url else {
+                loadedImage = nil
+                return
+            }
+            if let cached = TVImageCache.shared.cachedImage(for: url) {
+                if loadedImage !== cached {
+                    withAnimation(.easeInOut(duration: 0.35)) {
+                        loadedImage = cached
+                    }
+                }
+                return
+            }
+            let fetched = await TVImageCache.shared.loadImage(for: url)
+            guard !Task.isCancelled, let fetched else { return }
+            withAnimation(.easeInOut(duration: 0.35)) {
+                loadedImage = fetched
+            }
         }
     }
 }
@@ -130,6 +266,91 @@ struct TVProgressBar: View {
             }
         }
         .frame(height: height)
+    }
+}
+
+struct EchoTVButtonStyle: ButtonStyle {
+    var cornerRadius: CGFloat = 12
+    var accent: Color = EchoTVTheme.neoMint
+
+    func makeBody(configuration: Configuration) -> some View {
+        EchoTVButtonBody(
+            configuration: configuration,
+            cornerRadius: cornerRadius,
+            accent: accent
+        )
+    }
+}
+
+private struct EchoTVButtonBody: View {
+    @Environment(\.isFocused) private var isFocused
+    let configuration: ButtonStyle.Configuration
+    let cornerRadius: CGFloat
+    let accent: Color
+
+    var body: some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : (isFocused ? 1.02 : 1.0))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(
+                        isFocused ? accent.opacity(0.95) : Color.clear,
+                        lineWidth: 2.5
+                    )
+            )
+            .shadow(
+                color: isFocused ? accent.opacity(0.26) : .clear,
+                radius: 8,
+                y: 3
+            )
+            .focusEffectDisabled()
+            .animation(.easeOut(duration: 0.14), value: isFocused)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+    }
+}
+
+struct TVLibraryModeToggle: View {
+    @Environment(TVEchoStore.self) private var store
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(TVLibraryTapMode.allCases) { mode in
+                let selected = store.libraryTapMode == mode
+                let accent = mode == .playNow ? EchoTVTheme.neoMint : EchoTVTheme.neoCyan
+                Button {
+                    if store.libraryTapMode != mode {
+                        store.libraryTapMode = mode
+                        store.showToast(
+                            mode == .playNow
+                                ? "Library Mode: Play Now"
+                                : "Library Mode: Add to Queue"
+                        )
+                    }
+                } label: {
+                    Label(
+                        mode.rawValue,
+                        systemImage: mode == .playNow ? "play.fill" : "text.badge.plus"
+                    )
+                    .font(.system(size: 17, weight: .bold))
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                    .background(selected ? accent : Color.clear)
+                    .foregroundStyle(selected ? Color.black : EchoTVTheme.textSecondary)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(EchoTVButtonStyle(cornerRadius: 8, accent: accent))
+            }
+        }
+        .padding(4)
+        .background(EchoTVTheme.surfaceElevated)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(
+                    (store.libraryTapMode == .addToQueue ? EchoTVTheme.neoCyan : EchoTVTheme.border).opacity(0.6),
+                    lineWidth: 1.5
+                )
+        )
     }
 }
 

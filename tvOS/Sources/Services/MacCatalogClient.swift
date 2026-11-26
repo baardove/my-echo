@@ -89,12 +89,20 @@ final class TVBonjourMacBrowser: @unchecked Sendable {
     }
 }
 
-/// HTTP client talking to My Echo on Mac for full library catalog, LAN lossless streaming, Mac remote control, and Party Mode TV display.
+/// HTTP client talking to My Echo Server (Unraid Docker) or My Echo on Mac for full library catalog, LAN lossless streaming, Mac remote control, and Party Mode TV display.
 actor MacCatalogClient {
     private let session: URLSession
     private let decoder: JSONDecoder = {
         let d = JSONDecoder()
-        d.dateDecodingStrategy = .iso8601
+        let frac = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+        let std = Date.ISO8601FormatStyle(includingFractionalSeconds: false)
+        d.dateDecodingStrategy = .custom { dec in
+            let c = try dec.singleValueContainer()
+            let s = try c.decode(String.self)
+            if let dt = try? frac.parse(s) { return dt }
+            if let dt = try? std.parse(s) { return dt }
+            throw DecodingError.dataCorruptedError(in: c, debugDescription: "Invalid date: \(s)")
+        }
         return d
     }()
     private let encoder: JSONEncoder = {
@@ -105,8 +113,8 @@ actor MacCatalogClient {
 
     init() {
         let cfg = URLSessionConfiguration.default
-        cfg.timeoutIntervalForRequest = 15
-        cfg.timeoutIntervalForResource = 60
+        cfg.timeoutIntervalForRequest = 30
+        cfg.timeoutIntervalForResource = 90
         self.session = URLSession(configuration: cfg)
     }
 
@@ -129,6 +137,18 @@ actor MacCatalogClient {
     static func partyArtworkURL(partyBaseURL: String, hash: String?) -> URL? {
         guard let hash, !hash.isEmpty, let base = normalizeBase(partyBaseURL) else { return nil }
         return URL(string: "\(base)/api/party/artwork/\(hash)")
+    }
+
+    static func partyStreamURL(partyBaseURL: String, trackID: String) -> URL? {
+        guard !trackID.isEmpty, let base = normalizeBase(partyBaseURL) else { return nil }
+        let encodedID = trackID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? trackID
+        return URL(string: "\(base)/api/party/stream/\(encodedID)")
+    }
+
+    static func partyVoiceIntroURL(partyBaseURL: String, trackID: String) -> URL? {
+        guard !trackID.isEmpty, let base = normalizeBase(partyBaseURL) else { return nil }
+        let encodedID = trackID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? trackID
+        return URL(string: "\(base)/api/party/intro/\(encodedID)")
     }
 
     static func catalogTrackStreamURL(serverURL: String, pin: String, trackID: String) -> URL? {
@@ -183,6 +203,74 @@ actor MacCatalogClient {
         let (data, resp) = try await session.data(for: req)
         try validateHTTP(resp)
         return try decoder.decode(TVPartyEnvelope.self, from: data)
+    }
+
+    func startServerPartySession(serverURL: String, pin: String, rendererID: String, rendererName: String) async throws -> TVPartyEnvelope {
+        var req = try buildRequest(serverURL: serverURL, path: "/api/party/session/start", pin: pin)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["rendererId": rendererID, "rendererName": rendererName])
+        let (data, resp) = try await session.data(for: req)
+        try validateHTTP(resp)
+        return try decoder.decode(TVPartyEnvelope.self, from: data)
+    }
+
+    func stopServerPartySession(serverURL: String, pin: String) async throws -> TVPartyEnvelope {
+        var req = try buildRequest(serverURL: serverURL, path: "/api/party/session/stop", pin: pin)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = Data("{}".utf8)
+        let (data, resp) = try await session.data(for: req)
+        try validateHTTP(resp)
+        return try decoder.decode(TVPartyEnvelope.self, from: data)
+    }
+
+    func sendPartyHostCommand(serverURL: String, pin: String, action: String) async throws {
+        var req = try buildRequest(serverURL: serverURL, path: "/api/party/host/command", pin: pin)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["action": action])
+        let (_, resp) = try await session.data(for: req)
+        try validateHTTP(resp)
+    }
+
+    func sendPartyRendererHeartbeat(
+        serverURL: String,
+        pin: String,
+        rendererID: String,
+        rendererName: String,
+        trackID: String,
+        currentTime: TimeInterval,
+        isPlaying: Bool,
+        isPlayingVoiceIntro: Bool
+    ) async throws -> TVPartyPlaylistState {
+        var req = try buildRequest(serverURL: serverURL, path: "/api/party/renderer/heartbeat", pin: pin)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: [
+            "rendererId": rendererID,
+            "rendererName": rendererName,
+            "trackId": trackID,
+            "currentTime": currentTime,
+            "isPlaying": isPlaying,
+            "isPlayingVoiceIntro": isPlayingVoiceIntro
+        ])
+        let (data, resp) = try await session.data(for: req)
+        try validateHTTP(resp)
+        return try decoder.decode(TVPartyPlaylistState.self, from: data)
+    }
+
+    func notifyPartyRendererEnded(serverURL: String, pin: String, rendererID: String, trackID: String) async throws -> TVPartyPlaylistState {
+        var req = try buildRequest(serverURL: serverURL, path: "/api/party/renderer/ended", pin: pin)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: [
+            "rendererId": rendererID,
+            "trackId": trackID
+        ])
+        let (data, resp) = try await session.data(for: req)
+        try validateHTTP(resp)
+        return try decoder.decode(TVPartyPlaylistState.self, from: data)
     }
 
     /// Direct unauthenticated Party Mode polling when user enters a standalone Party Mode URL (e.g. `http://192.168.1.50:53333`).

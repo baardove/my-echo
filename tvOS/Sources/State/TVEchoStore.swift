@@ -7,6 +7,19 @@ enum TVLibrarySource: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum TVLibraryTapMode: String, CaseIterable, Identifiable {
+    case playNow = "Play Now"
+    case addToQueue = "Add to Queue"
+    var id: String { rawValue }
+}
+
+enum TVPartyAudioOutput: String, CaseIterable, Identifiable {
+    case mac = "Mac"
+    case tv = "TV"
+    case both = "Both"
+    var id: String { rawValue }
+}
+
 enum TVTab: Hashable {
     case home
     case library
@@ -22,6 +35,7 @@ enum TVTab: Hashable {
 @Observable
 final class TVEchoStore {
     static let presetMacTailscaleURL = "http://100.86.21.27:48721"
+    static let presetUnraidEchoServerTailscaleURL = "http://100.92.217.88:48721"
     static let presetUnraidTailscaleNavidromeURL = "http://100.92.217.88:4533"
 
     let macClient = MacCatalogClient()
@@ -29,20 +43,35 @@ final class TVEchoStore {
     let podcastService = TVPodcastService()
     let bonjourBrowser = TVBonjourMacBrowser()
     let player = TVAudioPlayer()
+    private let partyRendererID: String = "apple-tv-\(UUID().uuidString.prefix(8))"
 
     // Navigation
     var selectedTab: TVTab = .home
-    var activeSource: TVLibrarySource = .mac
+    var activeSource: TVLibrarySource = .mac {
+        didSet { defaults.set(activeSource.rawValue, forKey: "tv.activeSource") }
+    }
+    var isNowPlayingPresented: Bool = false
+    var libraryTapMode: TVLibraryTapMode = .playNow {
+        didSet { defaults.set(libraryTapMode.rawValue, forKey: "tv.libraryTapMode") }
+    }
 
-    // Mac Connection & Full Library Catalog
+    func openNowPlaying() {
+        if selectedTab != .nowPlaying {
+            isNowPlayingPresented = true
+        }
+    }
+
+    // Echo Server / Mac Connection & Full Library Catalog
     var macServerURL: String = ""
     var macTailscaleURL: String = presetMacTailscaleURL
     var pairingPIN: String = ""
     var discoveredMacs: [TVDiscoveredMacServer] = []
     var macServerName: String = ""
+    var connectedServerKind: String = "mac" // "echo-server" (Unraid Docker) or "mac"
     var isConnectedToMac: Bool = false
+    var isConnectedToEchoServer: Bool { isConnectedToMac && connectedServerKind == "echo-server" }
     var isLoadingMacCatalog: Bool = false
-    var macStatusText: String = "Searching for My Echo on Mac..."
+    var macStatusText: String = "Searching for My Echo Server or Mac..."
     var macError: String?
 
     var tracks: [TVTrack] = []
@@ -65,7 +94,9 @@ final class TVEchoStore {
     var navidromeStatusText: String?
     var navidromeError: String?
     var isLoadingNavidrome: Bool = false
-    var navidromeAlbumListType: String = "newest"
+    var navidromeAlbumListType: String = "newest" {
+        didSet { defaults.set(navidromeAlbumListType, forKey: "tv.navidromeAlbumListType") }
+    }
     var navidromeAlbums: [TVNavidromeAlbum] = []
     var navidromeArtists: [TVNavidromeArtist] = []
     var navidromePlaylists: [TVNavidromePlaylist] = []
@@ -82,11 +113,13 @@ final class TVEchoStore {
     var remoteError: String?
     var isSendingRemoteCommand: Bool = false
 
-    // Party Mode TV Display
+    // Party Mode TV Display & Audio Output Routing
     var partyStatus: TVPartyStatus = TVPartyStatus()
     var partyState: TVPartyPlaylistState?
+    var partyAudioOutput: TVPartyAudioOutput = .mac
     var standalonePartyURL: String = ""
     var partyError: String?
+    private var macMutedByPartyTV: Bool = false
 
     // Toast feedback
     var toastMessage: String?
@@ -97,24 +130,37 @@ final class TVEchoStore {
     private var navSearchTask: Task<Void, Never>?
     private var toastTask: Task<Void, Never>?
 
+    private var cachedMacCatalogVersion: String?
+
     init() {
         loadSettings()
+        loadCachedMacCatalog()
+        loadCachedNavidromeHome()
         player.onNavidromeStreamPlayed = { [weak self] songID in
             guard let self, self.navidromeConfig.isConfigured else { return }
             let cfg = self.navidromeConfig
             Task { await self.navidromeClient.scrobble(songID: songID, config: cfg) }
         }
+        player.onPartyTrackEnded = { [weak self] trackID in
+            guard let self, self.isConnectedToEchoServer else { return }
+            Task { await self.notifyServerPartyTrackEnded(trackID: trackID) }
+        }
         setupBonjour()
 
-        Task {
-            if !macServerURL.isEmpty && !pairingPIN.isEmpty {
+        let shouldLoadMac = !effectiveMacURL.isEmpty && !pairingPIN.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let shouldLoadNav = navidromeConfig.isConfigured && (navidromeConfig.isEnabled || activeSource == .navidrome)
+
+        if shouldLoadMac {
+            Task {
                 await refreshMacCatalog(silent: true)
+                if !isConnectedToMac && tracks.isEmpty && navidromeConfig.isEnabled && navidromeConfig.isConfigured {
+                    activeSource = .navidrome
+                }
             }
-            if navidromeConfig.isEnabled && navidromeConfig.isConfigured {
+        }
+        if shouldLoadNav {
+            Task {
                 await refreshNavidromeHome()
-            }
-            if !isConnectedToMac && navidromeConfig.isEnabled && navidromeConfig.isConfigured {
-                activeSource = .navidrome
             }
         }
     }
@@ -126,6 +172,21 @@ final class TVEchoStore {
         macTailscaleURL = defaults.string(forKey: "tv.macTailscaleURL") ?? Self.presetMacTailscaleURL
         pairingPIN = defaults.string(forKey: "tv.pairingPIN") ?? ""
         standalonePartyURL = defaults.string(forKey: "tv.standalonePartyURL") ?? ""
+        if let savedSource = defaults.string(forKey: "tv.activeSource"),
+           let parsedSource = TVLibrarySource(rawValue: savedSource) {
+            activeSource = parsedSource
+        }
+        if let savedTapMode = defaults.string(forKey: "tv.libraryTapMode"),
+           let parsedTapMode = TVLibraryTapMode(rawValue: savedTapMode) {
+            libraryTapMode = parsedTapMode
+        }
+        if let savedListType = defaults.string(forKey: "tv.navidromeAlbumListType"), !savedListType.isEmpty {
+            navidromeAlbumListType = savedListType
+        }
+        if let savedOutput = defaults.string(forKey: "tv.partyAudioOutput"),
+           let parsedOutput = TVPartyAudioOutput(rawValue: savedOutput) {
+            partyAudioOutput = parsedOutput
+        }
 
         if let data = defaults.data(forKey: "tv.navidromeConfig"),
            let decoded = try? JSONDecoder().decode(TVNavidromeConfig.self, from: data) {
@@ -141,6 +202,69 @@ final class TVEchoStore {
                 password: "",
                 streamQuality: .original
             )
+        }
+    }
+
+    private static var macCatalogCacheURL: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("mac_catalog_cache.json")
+    }
+
+    private static var navidromeHomeCacheURL: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("navidrome_home_cache.json")
+    }
+
+    private struct CachedNavidromeHome: Codable, Sendable {
+        var albums: [TVNavidromeAlbum]
+        var artists: [TVNavidromeArtist]
+        var playlists: [TVNavidromePlaylist]
+    }
+
+    private func loadCachedMacCatalog() {
+        guard let url = Self.macCatalogCacheURL,
+              let data = try? Data(contentsOf: url) else { return }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        if let catalog = try? decoder.decode(TVFullCatalogPayload.self, from: data) {
+            cachedMacCatalogVersion = catalog.catalogVersion
+            applyMacCatalog(catalog)
+            macStatusText = "Loaded \(catalog.serverName) · \(catalog.tracks.count) tracks (syncing...)"
+        }
+    }
+
+    private func saveCachedMacCatalog(_ catalog: TVFullCatalogPayload) {
+        guard let url = Self.macCatalogCacheURL else { return }
+        Task.detached(priority: .utility) {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            if let data = try? encoder.encode(catalog) {
+                try? data.write(to: url, options: .atomic)
+            }
+        }
+    }
+
+    private func loadCachedNavidromeHome() {
+        guard let url = Self.navidromeHomeCacheURL,
+              let data = try? Data(contentsOf: url),
+              let cached = try? JSONDecoder().decode(CachedNavidromeHome.self, from: data) else { return }
+        navidromeAlbums = cached.albums
+        navidromeArtists = cached.artists
+        navidromePlaylists = cached.playlists
+        navidromeStatusText = "\(cached.albums.count) albums · \(cached.artists.count) artists (cached)"
+    }
+
+    private func saveCachedNavidromeHome(
+        albums: [TVNavidromeAlbum],
+        artists: [TVNavidromeArtist],
+        playlists: [TVNavidromePlaylist]
+    ) {
+        guard let url = Self.navidromeHomeCacheURL else { return }
+        let snapshot = CachedNavidromeHome(albums: albums, artists: artists, playlists: playlists)
+        Task.detached(priority: .utility) {
+            if let data = try? JSONEncoder().encode(snapshot) {
+                try? data.write(to: url, options: .atomic)
+            }
         }
     }
 
@@ -231,33 +355,60 @@ final class TVEchoStore {
 
         do {
             let catalog = try await macClient.fetchFullCatalog(serverURL: url, pin: pin)
-            applyMacCatalog(catalog)
+            if macServerURL != url {
+                macServerURL = url
+            }
+            saveMacSettings()
+            if cachedMacCatalogVersion != catalog.catalogVersion || tracks.isEmpty {
+                cachedMacCatalogVersion = catalog.catalogVersion
+                applyMacCatalog(catalog)
+                saveCachedMacCatalog(catalog)
+            } else {
+                partyStatus = catalog.partyStatus
+            }
             isConnectedToMac = true
             macStatusText = "Connected to \(catalog.serverName) · \(catalog.tracks.count) tracks"
             if !silent {
                 showToast("Connected to \(catalog.serverName)")
             }
         } catch {
-            // Fallback to Tailscale URL if LAN failed and Tailscale URL is different
+            // Try Bonjour-discovered Mac or Tailscale URL as fallback if primary URL failed
+            var fallbacks: [String] = []
+            if let bonjourURL = discoveredMacs.first?.baseURLString, bonjourURL != url {
+                fallbacks.append(bonjourURL)
+            }
             let tsURL = macTailscaleURL.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !tsURL.isEmpty && tsURL != url {
-                if let catalog = try? await macClient.fetchFullCatalog(serverURL: tsURL, pin: pin) {
-                    macServerURL = tsURL
+            if !tsURL.isEmpty && tsURL != url && !fallbacks.contains(tsURL) {
+                fallbacks.append(tsURL)
+            }
+            for fallbackURL in fallbacks {
+                if let catalog = try? await macClient.fetchFullCatalog(serverURL: fallbackURL, pin: pin) {
+                    macServerURL = fallbackURL
                     saveMacSettings()
-                    applyMacCatalog(catalog)
+                    if cachedMacCatalogVersion != catalog.catalogVersion || tracks.isEmpty {
+                        cachedMacCatalogVersion = catalog.catalogVersion
+                        applyMacCatalog(catalog)
+                        saveCachedMacCatalog(catalog)
+                    } else {
+                        partyStatus = catalog.partyStatus
+                    }
                     isConnectedToMac = true
-                    macStatusText = "Connected via Tailscale to \(catalog.serverName)"
+                    macStatusText = "Connected to \(catalog.serverName) · \(catalog.tracks.count) tracks"
                     return
                 }
             }
             isConnectedToMac = false
             macError = error.localizedDescription
-            macStatusText = "Disconnected"
+            macStatusText = tracks.isEmpty ? "Disconnected" : "Offline (showing cached \(tracks.count) tracks)"
         }
     }
 
     private func applyMacCatalog(_ catalog: TVFullCatalogPayload) {
         macServerName = catalog.serverName
+        connectedServerKind = catalog.serverKind ?? "mac"
+        if connectedServerKind == "echo-server" && partyAudioOutput == .mac {
+            partyAudioOutput = .tv
+        }
         tracks = catalog.tracks
         tracksByID = Dictionary(uniqueKeysWithValues: catalog.tracks.map { ($0.id, $0) })
         playlists = catalog.playlists
@@ -352,16 +503,39 @@ final class TVEchoStore {
             isLossless: track.isLossless,
             artworkURL: macArtworkURL(for: track.artworkHash),
             source: .macStream(trackID: track.id, url: streamURL),
-            sourceBadge: "MAC LAN"
+            sourceBadge: isConnectedToEchoServer ? "ECHO SERVER" : "MAC LAN"
         )
     }
 
-    func playMacTracks(_ trackList: [TVTrack], startingAt index: Int = 0, openNowPlaying: Bool = true) {
+    func playMacTracks(_ trackList: [TVTrack], startingAt index: Int = 0, openNowPlaying shouldOpenNowPlaying: Bool = true) {
         let items = trackList.compactMap(playableItem(from:))
         guard !items.isEmpty else { return }
         player.play(items: items, startingAt: min(index, items.count - 1))
-        if openNowPlaying {
-            selectedTab = .nowPlaying
+        if shouldOpenNowPlaying {
+            openNowPlaying()
+        }
+    }
+
+    func enqueueMacTrack(_ track: TVTrack) {
+        guard let item = playableItem(from: track) else { return }
+        player.enqueue(item)
+        showToast("Added \"\(track.title)\" to Queue (\(player.queue.count))")
+    }
+
+    func enqueueMacTracks(_ trackList: [TVTrack], label: String) {
+        let items = trackList.compactMap(playableItem(from:))
+        guard !items.isEmpty else { return }
+        player.enqueueAll(items)
+        showToast("Added \"\(label)\" (\(items.count) tracks) to Queue")
+    }
+
+    func handleMacTrackTap(in trackList: [TVTrack], at index: Int) {
+        guard trackList.indices.contains(index) else { return }
+        switch libraryTapMode {
+        case .playNow:
+            playMacTracks(trackList, startingAt: index)
+        case .addToQueue:
+            enqueueMacTrack(trackList[index])
         }
     }
 
@@ -371,6 +545,13 @@ final class TVEchoStore {
 
     func playMacPlaylist(_ playlist: TVPlaylist, startingAt index: Int = 0) {
         playMacTracks(tracks(for: playlist), startingAt: index)
+    }
+
+    func playMacPlaylistShuffled(_ playlist: TVPlaylist) {
+        let list = tracks(for: playlist)
+        guard !list.isEmpty else { return }
+        player.isShuffled = true
+        playMacTracks(list, startingAt: Int.random(in: 0..<list.count))
     }
 
     // MARK: - Podcasts (Refresh RSS & Stream on TV)
@@ -436,7 +617,7 @@ final class TVEchoStore {
             sourceBadge: "PODCAST"
         )
         player.play(items: [item], startingAt: 0)
-        selectedTab = .nowPlaying
+        openNowPlaying()
     }
 
     // MARK: - Navidrome Streaming
@@ -476,6 +657,7 @@ final class TVEchoStore {
             navidromeAlbums = a
             navidromeArtists = r
             navidromePlaylists = p
+            saveCachedNavidromeHome(albums: a, artists: r, playlists: p)
             navidromeStatusText = "\(a.count) albums · \(r.count) artists"
         } catch {
             navidromeError = error.localizedDescription
@@ -512,7 +694,30 @@ final class TVEchoStore {
         let items = songs.compactMap(playableItem(from:))
         guard !items.isEmpty else { return }
         player.play(items: items, startingAt: min(index, items.count - 1))
-        selectedTab = .nowPlaying
+        openNowPlaying()
+    }
+
+    func enqueueNavidromeSong(_ song: TVNavidromeSong) {
+        guard let item = playableItem(from: song) else { return }
+        player.enqueue(item)
+        showToast("Added \"\(song.title)\" to Queue (\(player.queue.count))")
+    }
+
+    func enqueueNavidromeSongs(_ songs: [TVNavidromeSong], label: String) {
+        let items = songs.compactMap(playableItem(from:))
+        guard !items.isEmpty else { return }
+        player.enqueueAll(items)
+        showToast("Added \"\(label)\" (\(items.count) tracks) to Queue")
+    }
+
+    func handleNavidromeSongTap(in songs: [TVNavidromeSong], at index: Int) {
+        guard songs.indices.contains(index) else { return }
+        switch libraryTapMode {
+        case .playNow:
+            playNavidromeSongs(songs, startingAt: index)
+        case .addToQueue:
+            enqueueNavidromeSong(songs[index])
+        }
     }
 
     func playNavidromeAlbum(_ album: TVNavidromeAlbum) async {
@@ -666,16 +871,164 @@ final class TVEchoStore {
         partyPollTask = nil
     }
 
+    func setPartyAudioOutput(_ mode: TVPartyAudioOutput) {
+        partyAudioOutput = mode
+        defaults.set(mode.rawValue, forKey: "tv.partyAudioOutput")
+        showToast("Party Audio: \(mode.rawValue)")
+
+        Task {
+            // Coordinate Mac mute cleanly so TV-only mode doesn't double-play on Mac speakers
+            if isConnectedToMac {
+                await refreshRemoteStateOnce()
+                let macCurrentlyMuted = remoteState?.isMuted ?? false
+                switch mode {
+                case .tv:
+                    if !macCurrentlyMuted {
+                        await sendRemoteCommand("toggleMute")
+                        macMutedByPartyTV = true
+                    }
+                case .mac, .both:
+                    if macMutedByPartyTV && macCurrentlyMuted {
+                        await sendRemoteCommand("toggleMute")
+                        macMutedByPartyTV = false
+                    }
+                }
+            }
+
+            if mode == .mac {
+                player.stopPartyStream()
+            } else if let state = partyState, partyStatus.isLive {
+                syncPartyAudioToState(state)
+            }
+        }
+    }
+
+    func partyStreamURL(for trackID: String?) -> URL? {
+        guard let trackID, !trackID.isEmpty else { return nil }
+        if let join = partyStatus.joinURL ?? (standalonePartyURL.isEmpty ? nil : standalonePartyURL),
+           let u = MacCatalogClient.partyStreamURL(partyBaseURL: join, trackID: trackID) {
+            return u
+        }
+        return MacCatalogClient.catalogTrackStreamURL(serverURL: effectiveMacURL, pin: pairingPIN, trackID: trackID)
+    }
+
+    func partyVoiceIntroURL(for trackID: String?) -> URL? {
+        guard let trackID, !trackID.isEmpty else { return nil }
+        if let join = partyStatus.joinURL ?? (standalonePartyURL.isEmpty ? nil : standalonePartyURL) {
+            return MacCatalogClient.partyVoiceIntroURL(partyBaseURL: join, trackID: trackID)
+        }
+        return MacCatalogClient.partyVoiceIntroURL(partyBaseURL: effectiveMacURL, trackID: trackID)
+    }
+
+    func startPartyMode() async {
+        let url = effectiveMacURL
+        let pin = pairingPIN.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !url.isEmpty, !pin.isEmpty else { return }
+        if isConnectedToEchoServer {
+            do {
+                let env = try await macClient.startServerPartySession(
+                    serverURL: url,
+                    pin: pin,
+                    rendererID: partyRendererID,
+                    rendererName: "Apple TV"
+                )
+                partyAudioOutput = .tv
+                partyStatus = env.status
+                partyState = env.state
+                partyError = nil
+                syncPartyAudioToState(env.state)
+                showToast("Party Mode started on \(macServerName)")
+            } catch {
+                partyError = error.localizedDescription
+                showToast("Failed to start Party Mode: \(error.localizedDescription)")
+            }
+        } else {
+            await sendRemoteCommand("startPartyMode")
+            await refreshPartyStateOnce()
+        }
+    }
+
+    func sendPartyTransportCommand(_ action: String) async {
+        if isConnectedToEchoServer {
+            let url = effectiveMacURL
+            let pin = pairingPIN.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !url.isEmpty, !pin.isEmpty else { return }
+            do {
+                try await macClient.sendPartyHostCommand(serverURL: url, pin: pin, action: action)
+                await refreshPartyStateOnce()
+            } catch {
+                showToast("Party control error: \(error.localizedDescription)")
+            }
+        } else {
+            await sendRemoteCommand(action)
+            await refreshPartyStateOnce()
+        }
+    }
+
+    private func notifyServerPartyTrackEnded(trackID: String) async {
+        let url = effectiveMacURL
+        let pin = pairingPIN.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isConnectedToEchoServer, !url.isEmpty, !pin.isEmpty else { return }
+        if let updated = try? await macClient.notifyPartyRendererEnded(
+            serverURL: url,
+            pin: pin,
+            rendererID: partyRendererID,
+            trackID: trackID
+        ) {
+            partyState = updated
+            syncPartyAudioToState(updated)
+        }
+    }
+
+    private func syncPartyAudioToState(_ state: TVPartyPlaylistState?) {
+        let shouldPlayOnTV = isConnectedToEchoServer || partyAudioOutput == .tv || partyAudioOutput == .both
+        guard shouldPlayOnTV,
+              partyStatus.isLive,
+              let state,
+              let trackID = state.currentTrackID, !trackID.isEmpty else {
+            player.stopPartyStream()
+            return
+        }
+        let url = partyStreamURL(for: trackID)
+        let curEntry = state.tracks.first(where: { $0.isCurrent })
+        let introURL = (curEntry?.hasVoiceIntro == true) ? partyVoiceIntroURL(for: trackID) : nil
+        player.syncPartyStream(
+            url: url,
+            trackID: trackID,
+            isPlaying: state.isPlaying,
+            targetTime: state.currentTime,
+            voiceIntroURL: introURL,
+            isAuthoritativeRenderer: isConnectedToEchoServer
+        )
+    }
+
     func refreshPartyStateOnce() async {
-        // 1. Prefer authenticated Mac Companion endpoint when paired
+        // 1. Prefer authenticated Echo Server / Mac Companion endpoint when paired
         let url = effectiveMacURL
         let pin = pairingPIN.trimmingCharacters(in: .whitespacesAndNewlines)
         if !url.isEmpty && !pin.isEmpty {
             do {
+                // Report live TV playback progress back to Unraid Echo Server when acting as authoritative renderer
+                if isConnectedToEchoServer,
+                   partyStatus.isLive,
+                   player.isPartyStreamActive,
+                   let curTrackID = partyState?.currentTrackID {
+                    _ = try? await macClient.sendPartyRendererHeartbeat(
+                        serverURL: url,
+                        pin: pin,
+                        rendererID: partyRendererID,
+                        rendererName: "Apple TV",
+                        trackID: curTrackID,
+                        currentTime: player.partyPlaybackCurrentTime,
+                        isPlaying: player.partyPlaybackIsPlaying,
+                        isPlayingVoiceIntro: player.isPlayingPartyVoiceIntro
+                    )
+                }
                 let env = try await macClient.fetchPartyEnvelope(serverURL: url, pin: pin)
                 partyStatus = env.status
                 partyState = env.state
                 partyError = nil
+                syncPartyAudioToState(env.state)
                 return
             } catch {
                 partyError = error.localizedDescription
@@ -690,6 +1043,7 @@ final class TVEchoStore {
                 partyState = st
                 partyStatus = TVPartyStatus(isLive: true, port: nil, lanIP: nil, joinURL: MacCatalogClient.normalizeBase(direct), playlistName: st.playlistName)
                 partyError = nil
+                syncPartyAudioToState(st)
             } catch {
                 partyError = error.localizedDescription
             }

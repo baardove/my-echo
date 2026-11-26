@@ -28,19 +28,13 @@ struct TVRootView: View {
 
                 TVNowPlayingView()
                     .tabItem {
-                        Label(
-                            store.player.isPlaying ? "Playing" : "Now Playing",
-                            systemImage: store.player.isPlaying ? "waveform" : "play.circle.fill"
-                        )
+                        Label("Playing", systemImage: "play.circle.fill")
                     }
                     .tag(TVTab.nowPlaying)
 
                 TVPartyModeView()
                     .tabItem {
-                        Label(
-                            store.partyStatus.isLive ? "Party LIVE" : "Party TV",
-                            systemImage: "sparkles.tv.fill"
-                        )
+                        Label("Party TV", systemImage: "sparkles.tv.fill")
                     }
                     .tag(TVTab.partyTV)
 
@@ -76,6 +70,21 @@ struct TVRootView: View {
             }
             .tint(EchoTVTheme.neoMint)
 
+            TVToastOverlay()
+        }
+        .fullScreenCover(isPresented: $bindableStore.isNowPlayingPresented) {
+            TVNowPlayingView()
+                .environment(store)
+                .preferredColorScheme(.dark)
+        }
+    }
+}
+
+private struct TVToastOverlay: View {
+    @Environment(TVEchoStore.self) private var store
+
+    var body: some View {
+        Group {
             if let toast = store.toastMessage {
                 HStack(spacing: 12) {
                     Image(systemName: "checkmark.circle.fill")

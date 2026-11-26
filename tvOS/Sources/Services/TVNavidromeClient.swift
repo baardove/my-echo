@@ -38,10 +38,15 @@ actor TVNavidromeClient {
         return URL(string: trimmed)
     }
 
+    private static let stableArtworkSalt = String(
+        UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12)
+    ).lowercased()
+
     static func buildSubsonicURL(
         endpoint: String,
         extraItems: [URLQueryItem] = [],
-        config: TVNavidromeConfig
+        config: TVNavidromeConfig,
+        fixedSalt: String? = nil
     ) throws -> URL {
         guard let base = normalizeBaseURL(config.serverURL) else {
             throw TVNavidromeError.invalidURL
@@ -50,7 +55,7 @@ actor TVNavidromeClient {
             throw TVNavidromeError.notConfigured
         }
 
-        let salt = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12)).lowercased()
+        let salt = fixedSalt ?? String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12)).lowercased()
         let tokenDigest = Insecure.MD5.hash(data: Data((config.password + salt).utf8))
         let tokenHex = tokenDigest.map { String(format: "%02x", $0) }.joined()
 
@@ -88,7 +93,8 @@ actor TVNavidromeClient {
                 URLQueryItem(name: "id", value: coverArtID),
                 URLQueryItem(name: "size", value: String(size))
             ],
-            config: config
+            config: config,
+            fixedSalt: stableArtworkSalt
         )
     }
 

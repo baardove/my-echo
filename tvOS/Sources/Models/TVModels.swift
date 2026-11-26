@@ -183,6 +183,7 @@ struct TVPartyStatus: Codable, Hashable, Sendable {
 
 struct TVFullCatalogPayload: Codable, Sendable {
     var serverName: String
+    var serverKind: String?
     var catalogVersion: String
     var generatedAt: Date
     var tracks: [TVTrack]
@@ -196,6 +197,7 @@ struct TVFullCatalogPayload: Codable, Sendable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         serverName = try c.decode(String.self, forKey: .serverName)
+        serverKind = try c.decodeIfPresent(String.self, forKey: .serverKind)
         catalogVersion = try c.decode(String.self, forKey: .catalogVersion)
         generatedAt = try c.decode(Date.self, forKey: .generatedAt)
         tracks = try c.decodeIfPresent([TVTrack].self, forKey: .tracks) ?? []
@@ -210,6 +212,7 @@ struct TVFullCatalogPayload: Codable, Sendable {
 
 struct TVPingPayload: Codable, Sendable {
     var app: String
+    var serverKind: String?
     var serverName: String
     var deviceID: String
     var deviceName: String
@@ -323,6 +326,8 @@ struct TVPartyPlaylistState: Codable, Hashable, Sendable {
     var tracks: [TVPartyQueueEntry]
     var guests: [TVPartyGuestPresence]
     var chatMessages: [TVPartyChatMessage]
+    var activeRendererID: String?
+    var activeRendererName: String?
 }
 
 struct TVPartyEnvelope: Codable, Sendable {
@@ -418,7 +423,7 @@ struct TVNavidromeConfig: Codable, Hashable, Sendable {
     }
 }
 
-struct TVNavidromeAlbum: Identifiable, Hashable, Sendable {
+struct TVNavidromeAlbum: Identifiable, Codable, Hashable, Sendable {
     var id: String
     var name: String
     var artist: String
@@ -429,14 +434,14 @@ struct TVNavidromeAlbum: Identifiable, Hashable, Sendable {
     var duration: Int
 }
 
-struct TVNavidromeArtist: Identifiable, Hashable, Sendable {
+struct TVNavidromeArtist: Identifiable, Codable, Hashable, Sendable {
     var id: String
     var name: String
     var albumCount: Int
     var coverArt: String?
 }
 
-struct TVNavidromeSong: Identifiable, Hashable, Sendable {
+struct TVNavidromeSong: Identifiable, Codable, Hashable, Sendable {
     var id: String
     var title: String
     var artist: String
@@ -451,7 +456,7 @@ struct TVNavidromeSong: Identifiable, Hashable, Sendable {
     var size: Int64?
 }
 
-struct TVNavidromePlaylist: Identifiable, Hashable, Sendable {
+struct TVNavidromePlaylist: Identifiable, Codable, Hashable, Sendable {
     var id: String
     var name: String
     var songCount: Int
