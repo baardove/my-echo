@@ -651,7 +651,7 @@ public actor LidarrClient {
     }
 
     /// Direct low-level Lidarr `/api/v1/album/lookup` (used when resolving a specific album payload for ordering).
-    private func lookupAlbumsRaw(term: String, config: LidarrConfig) async throws -> [LidarrAlbumSearchResult] {
+    public func lookupAlbumsRaw(term: String, config: LidarrConfig) async throws -> [LidarrAlbumSearchResult] {
         let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
         let data = try await request(

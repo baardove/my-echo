@@ -246,7 +246,7 @@ public enum SyncPlanner {
         let playlistMap = Dictionary(uniqueKeysWithValues: playlists.map { ($0.id, $0) })
         for playlistID in profile.selectedPlaylistIDs {
             if let pl = playlistMap[playlistID] {
-                for tid in pl.trackIDs {
+                for tid in pl.trackIDs where !Playlist.isMissingTrackID(tid) {
                     ids.insert(tid)
                 }
             }

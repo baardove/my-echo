@@ -627,11 +627,106 @@ public struct ArtistGroup: Identifiable, Hashable, Sendable {
     }
 }
 
+public enum MissingTrackLidarrStatus: String, Codable, Hashable, Sendable {
+    case missing
+    case searching
+    case ordered
+    case notFound
+    case failed
+}
+
+public struct MissingPlaylistTrack: Identifiable, Codable, Hashable, Sendable {
+    /// Placeholder ID stored inside `Playlist.trackIDs` (prefixed with `Playlist.missingTrackIDPrefix`)
+    public var id: String
+    public var title: String
+    public var artist: String
+    public var album: String?
+    public var duration: TimeInterval
+    public var spotifyTrackID: String?
+    public var spotifyURI: String?
+    public var artworkURL: String?
+    public var lidarrStatus: MissingTrackLidarrStatus
+    public var lidarrAlbumTitle: String?
+    public var lidarrAlbumID: Int?
+    public var lidarrStatusDetail: String?
+    public var lastSearchedAt: Date?
+
+    public init(
+        id: String? = nil,
+        title: String,
+        artist: String,
+        album: String? = nil,
+        duration: TimeInterval = 0,
+        spotifyTrackID: String? = nil,
+        spotifyURI: String? = nil,
+        artworkURL: String? = nil,
+        lidarrStatus: MissingTrackLidarrStatus = .missing,
+        lidarrAlbumTitle: String? = nil,
+        lidarrAlbumID: Int? = nil,
+        lidarrStatusDetail: String? = nil,
+        lastSearchedAt: Date? = nil
+    ) {
+        if let id, !id.isEmpty {
+            self.id = id
+        } else if let sid = spotifyTrackID, !sid.isEmpty {
+            self.id = "\(Playlist.missingTrackIDPrefix)spotify:\(sid)"
+        } else {
+            self.id = "\(Playlist.missingTrackIDPrefix)\(UUID().uuidString)"
+        }
+        self.title = title
+        self.artist = artist
+        self.album = album
+        self.duration = duration
+        self.spotifyTrackID = spotifyTrackID
+        self.spotifyURI = spotifyURI
+        self.artworkURL = artworkURL
+        self.lidarrStatus = lidarrStatus
+        self.lidarrAlbumTitle = lidarrAlbumTitle
+        self.lidarrAlbumID = lidarrAlbumID
+        self.lidarrStatusDetail = lidarrStatusDetail
+        self.lastSearchedAt = lastSearchedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, artist, album, duration, spotifyTrackID, spotifyURI, artworkURL
+        case lidarrStatus, lidarrAlbumTitle, lidarrAlbumID, lidarrStatusDetail, lastSearchedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        artist = try c.decodeIfPresent(String.self, forKey: .artist) ?? ""
+        album = try c.decodeIfPresent(String.self, forKey: .album)
+        duration = try c.decodeIfPresent(TimeInterval.self, forKey: .duration) ?? 0
+        spotifyTrackID = try c.decodeIfPresent(String.self, forKey: .spotifyTrackID)
+        spotifyURI = try c.decodeIfPresent(String.self, forKey: .spotifyURI)
+        artworkURL = try c.decodeIfPresent(String.self, forKey: .artworkURL)
+        let rawStatus = try c.decodeIfPresent(String.self, forKey: .lidarrStatus) ?? ""
+        lidarrStatus = MissingTrackLidarrStatus(rawValue: rawStatus) ?? .missing
+        lidarrAlbumTitle = try c.decodeIfPresent(String.self, forKey: .lidarrAlbumTitle)
+        lidarrAlbumID = try c.decodeIfPresent(Int.self, forKey: .lidarrAlbumID)
+        lidarrStatusDetail = try c.decodeIfPresent(String.self, forKey: .lidarrStatusDetail)
+        lastSearchedAt = try c.decodeIfPresent(Date.self, forKey: .lastSearchedAt)
+    }
+}
+
 public struct Playlist: Identifiable, Codable, Hashable, Sendable {
+    public static let missingTrackIDPrefix = "missing:"
+
+    public static func isMissingTrackID(_ id: String) -> Bool {
+        id.hasPrefix(missingTrackIDPrefix)
+    }
+
     public var id: UUID
     public var name: String
     public var description: String
+    /// Ordered list of track IDs (both matched local track IDs and `missing:...` placeholder IDs to preserve exact playlist order).
     public var trackIDs: [String]
+    /// Retained metadata for tracks that are not yet in the local library (displayed muted, skipped on play/sync/export, and auto-resolved when added).
+    public var missingTracks: [MissingPlaylistTrack]
+    public var spotifyPlaylistID: String?
+    public var spotifySourceURL: String?
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -640,6 +735,9 @@ public struct Playlist: Identifiable, Codable, Hashable, Sendable {
         name: String,
         description: String = "",
         trackIDs: [String] = [],
+        missingTracks: [MissingPlaylistTrack] = [],
+        spotifyPlaylistID: String? = nil,
+        spotifySourceURL: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -647,8 +745,54 @@ public struct Playlist: Identifiable, Codable, Hashable, Sendable {
         self.name = name
         self.description = description
         self.trackIDs = trackIDs
+        self.missingTracks = missingTracks
+        self.spotifyPlaylistID = spotifyPlaylistID
+        self.spotifySourceURL = spotifySourceURL
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, description, trackIDs, missingTracks, spotifyPlaylistID, spotifySourceURL, createdAt, updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        description = try c.decodeIfPresent(String.self, forKey: .description) ?? ""
+        trackIDs = try c.decodeIfPresent([String].self, forKey: .trackIDs) ?? []
+        missingTracks = try c.decodeIfPresent([MissingPlaylistTrack].self, forKey: .missingTracks) ?? []
+        spotifyPlaylistID = try c.decodeIfPresent(String.self, forKey: .spotifyPlaylistID)
+        spotifySourceURL = try c.decodeIfPresent(String.self, forKey: .spotifySourceURL)
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+    }
+
+    /// Only matched/real local track IDs (ignoring missing track placeholders)
+    public var playableTrackIDs: [String] {
+        trackIDs.filter { !Self.isMissingTrackID($0) }
+    }
+
+    /// Lookup map of missing track placeholders by placeholder ID
+    public var missingTracksByID: [String: MissingPlaylistTrack] {
+        Dictionary(uniqueKeysWithValues: missingTracks.map { ($0.id, $0) })
+    }
+
+    /// Number of missing tracks currently retained in this playlist
+    public var missingTrackCount: Int {
+        let validIDs = Set(missingTracks.map(\.id))
+        return trackIDs.reduce(0) { acc, tid in
+            acc + (Self.isMissingTrackID(tid) && validIDs.contains(tid) ? 1 : 0)
+        }
+    }
+
+    /// Ordered list of active missing tracks still referenced by `trackIDs`
+    public var activeMissingTracks: [MissingPlaylistTrack] {
+        let byID = missingTracksByID
+        return trackIDs.compactMap { tid in
+            Self.isMissingTrackID(tid) ? byID[tid] : nil
+        }
     }
 }
 
@@ -955,6 +1099,26 @@ public struct AlbumEditorialInfo: Identifiable, Codable, Hashable, Sendable {
         self.fetchedAt = fetchedAt
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case albumKey, releaseDate, label, genres, albumFans, artistFans, artistAlbumCount
+        case albumSummary, artistSummary, artistImageURL, fetchedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        albumKey = try c.decode(String.self, forKey: .albumKey)
+        releaseDate = try c.decodeIfPresent(String.self, forKey: .releaseDate)
+        label = try c.decodeIfPresent(String.self, forKey: .label)
+        genres = try c.decodeIfPresent([String].self, forKey: .genres) ?? []
+        albumFans = try c.decodeIfPresent(Int.self, forKey: .albumFans)
+        artistFans = try c.decodeIfPresent(Int.self, forKey: .artistFans)
+        artistAlbumCount = try c.decodeIfPresent(Int.self, forKey: .artistAlbumCount)
+        albumSummary = try c.decodeIfPresent(String.self, forKey: .albumSummary)
+        artistSummary = try c.decodeIfPresent(String.self, forKey: .artistSummary)
+        artistImageURL = try c.decodeIfPresent(String.self, forKey: .artistImageURL)
+        fetchedAt = try c.decodeIfPresent(Date.self, forKey: .fetchedAt) ?? Date()
+    }
+
     public var isStale: Bool {
         Date().timeIntervalSince(fetchedAt) >= Self.refreshTTL
     }
@@ -991,6 +1155,20 @@ public struct ArtistEditorialInfo: Identifiable, Codable, Hashable, Sendable {
         self.albumCount = albumCount
         self.imageURL = imageURL
         self.fetchedAt = fetchedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case artistKey, summary, fans, albumCount, imageURL, fetchedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        artistKey = try c.decode(String.self, forKey: .artistKey)
+        summary = try c.decodeIfPresent(String.self, forKey: .summary)
+        fans = try c.decodeIfPresent(Int.self, forKey: .fans)
+        albumCount = try c.decodeIfPresent(Int.self, forKey: .albumCount)
+        imageURL = try c.decodeIfPresent(String.self, forKey: .imageURL)
+        fetchedAt = try c.decodeIfPresent(Date.self, forKey: .fetchedAt) ?? Date()
     }
 
     public var isStale: Bool {
