@@ -15,7 +15,7 @@ struct PlayerBarView: View {
         let player = store.player
         let track = player.currentTrack
 
-        HStack(spacing: 18) {
+        CenteredPlayerBarLayout(spacing: 18, maxCenterWidth: 500, minSymmetricCenterWidth: 300) {
             // Left: Now Playing Track Info (Draggable onto playlists!)
             HStack(spacing: 12) {
                 Button {
@@ -251,8 +251,6 @@ struct PlayerBarView: View {
                 }
             }
             .frame(maxWidth: 500)
-
-            Spacer(minLength: 10)
 
             // Right: Harmonized Party Lock, Crossfade, Mini Player, Queue & Volume Controls
             HStack(spacing: 8) {
@@ -784,5 +782,70 @@ struct PlayerBarView: View {
         .padding(14)
         .frame(width: 300)
         .background(EchoTheme.surface)
+    }
+}
+
+/// Centers the middle transport/scrubber column horizontally in the full footer bar whenever space permits,
+/// and smoothly falls back to centering inside the remaining gap between left & right columns on narrower windows.
+private struct CenteredPlayerBarLayout: Layout {
+    var spacing: CGFloat = 18
+    var maxCenterWidth: CGFloat = 500
+    var minSymmetricCenterWidth: CGFloat = 300
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let height = proposal.height ?? subviews.map { $0.sizeThatFits(.unspecified).height }.max() ?? 82
+        let width = proposal.width ?? subviews.map { $0.sizeThatFits(.unspecified).width }.reduce(0, +)
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 3 else { return }
+        let left = subviews[0]
+        let center = subviews[1]
+        let right = subviews[2]
+
+        let heightProposal = ProposedViewSize(width: nil, height: bounds.height)
+        let rightSize = right.sizeThatFits(heightProposal)
+        let idealLeftSize = left.sizeThatFits(heightProposal)
+
+        // Ensure left never crowds out right + minimum center width on very narrow windows
+        let maxLeftAllowed = max(160, bounds.width - rightSize.width - minSymmetricCenterWidth * 0.65 - 2 * spacing)
+        let leftWidth = min(idealLeftSize.width, maxLeftAllowed)
+        let leftProposal = ProposedViewSize(width: leftWidth, height: bounds.height)
+        let leftSize = left.sizeThatFits(leftProposal)
+
+        // True geometric center of the footer if symmetric clearance accommodates at least minSymmetricCenterWidth
+        let maxSide = max(leftSize.width, rightSize.width)
+        let symmetricAvailable = bounds.width - 2 * (maxSide + spacing)
+
+        let centerWidth: CGFloat
+        let centerMidX: CGFloat
+
+        if symmetricAvailable >= minSymmetricCenterWidth {
+            centerWidth = min(maxCenterWidth, symmetricAvailable)
+            centerMidX = bounds.midX
+        } else {
+            let gapStart = bounds.minX + leftSize.width + spacing
+            let gapEnd = bounds.maxX - rightSize.width - spacing
+            let availableGap = max(0, gapEnd - gapStart)
+            centerWidth = min(maxCenterWidth, availableGap)
+            centerMidX = gapStart + availableGap / 2
+        }
+
+        left.place(
+            at: CGPoint(x: bounds.minX, y: bounds.midY),
+            anchor: .leading,
+            proposal: ProposedViewSize(width: leftSize.width, height: bounds.height)
+        )
+        center.place(
+            at: CGPoint(x: centerMidX, y: bounds.midY),
+            anchor: .center,
+            proposal: ProposedViewSize(width: centerWidth, height: bounds.height)
+        )
+        right.place(
+            at: CGPoint(x: bounds.maxX, y: bounds.midY),
+            anchor: .trailing,
+            proposal: ProposedViewSize(width: rightSize.width, height: bounds.height)
+        )
     }
 }
