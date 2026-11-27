@@ -486,6 +486,42 @@ struct MainContentView: View {
                 }
                 .help("Pair a FiiO player, MicroSD card, or local target folder to enable syncing.")
             }
+
+            // Hamburger Menu (extensible app menu — About My Echo for now)
+            NeoMenuButton {
+                [
+                    .action(
+                        title: "About My Echo",
+                        icon: "info.circle",
+                        isSelected: store.currentDestination == .about
+                    ) {
+                        store.clearGlobalSearch()
+                        store.isLidarrLibraryScope = false
+                        store.navigate(to: .about)
+                    }
+                ]
+            } label: { isHovered in
+                let isActive = store.currentDestination == .about
+                let accent = EchoTheme.neoMint
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(isActive ? accent : (isHovered ? EchoTheme.textPrimary : EchoTheme.textSecondary))
+                    .frame(width: 30, height: 28)
+                    .background(
+                        ZStack {
+                            EchoTheme.surfaceElevated
+                            accent.opacity(isActive ? 0.16 : (isHovered ? 0.10 : 0.04))
+                        }
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                            .strokeBorder(accent.opacity(isActive ? 0.85 : (isHovered ? 0.70 : 0.42)), lineWidth: 1)
+                    )
+                    .shadow(color: isActive ? accent.opacity(0.22) : .clear, radius: 5, y: 1)
+            }
+            .fixedSize()
+            .help("Menu (About My Echo)")
         }
         .padding(.horizontal, 18)
         .frame(height: 54)
@@ -531,6 +567,8 @@ struct MainContentView: View {
                 DeviceSyncView(deviceID: id)
             case .settings:
                 SettingsView()
+            case .about:
+                AboutView()
             }
         }
     }

@@ -219,6 +219,7 @@ enum NavDestination: Hashable {
     case sources
     case deviceSync(UUID)
     case settings
+    case about
 }
 
 struct PartyGuestActivityItem: Identifiable, Hashable {

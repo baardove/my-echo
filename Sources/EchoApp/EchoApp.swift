@@ -20,6 +20,14 @@ struct EchoApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1340, height: 860)
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About My Echo") {
+                    store.clearGlobalSearch()
+                    store.isLidarrLibraryScope = false
+                    store.navigate(to: .about)
+                }
+            }
+
             CommandGroup(after: .newItem) {
                 Button("Add Music Folder / NAS...") {
                     store.addLibrarySourceViaPanel()
