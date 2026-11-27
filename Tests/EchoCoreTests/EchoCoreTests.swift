@@ -1967,6 +1967,397 @@ final class EchoCoreTests: XCTestCase {
         XCTAssertEqual(String(data: inflated, encoding: .utf8), "{\"hello\":\"echo\"}\n")
     }
 
+    // MARK: - Spotify Playlist Importer, Missing-Track Retention & Auto-Resolve Tests
+
+    func testSpotifyPlaylistURLParsingVariants() {
+        XCTAssertEqual(
+            SpotifyPlaylistImporter.parsePlaylistID(from: "https://open.spotify.com/playlist/1L9eGmQJXFRN8oL22QtHkA?si=a81025ef1e6446f7"),
+            "1L9eGmQJXFRN8oL22QtHkA"
+        )
+        XCTAssertEqual(
+            SpotifyPlaylistImporter.parsePlaylistID(from: "https://open.spotify.com/embed/playlist/1L9eGmQJXFRN8oL22QtHkA"),
+            "1L9eGmQJXFRN8oL22QtHkA"
+        )
+        XCTAssertEqual(
+            SpotifyPlaylistImporter.parsePlaylistID(from: "https://open.spotify.com/intl-no/playlist/1L9eGmQJXFRN8oL22QtHkA"),
+            "1L9eGmQJXFRN8oL22QtHkA"
+        )
+        XCTAssertEqual(
+            SpotifyPlaylistImporter.parsePlaylistID(from: "https://open.spotify.com/user/bardove/playlist/1L9eGmQJXFRN8oL22QtHkA"),
+            "1L9eGmQJXFRN8oL22QtHkA"
+        )
+        XCTAssertEqual(
+            SpotifyPlaylistImporter.parsePlaylistID(from: "spotify:playlist:1L9eGmQJXFRN8oL22QtHkA"),
+            "1L9eGmQJXFRN8oL22QtHkA"
+        )
+        XCTAssertEqual(
+            SpotifyPlaylistImporter.parsePlaylistID(from: "1L9eGmQJXFRN8oL22QtHkA"),
+            "1L9eGmQJXFRN8oL22QtHkA"
+        )
+        XCTAssertNil(SpotifyPlaylistImporter.parsePlaylistID(from: "https://open.spotify.com/track/1x1PcpocUC1nUIs24G8Juf"))
+        XCTAssertNil(SpotifyPlaylistImporter.parsePlaylistID(from: "not a playlist"))
+    }
+
+    func testSpotifyEmbedHTMLParsingAndTrackMatchingAndMissingRetention() throws {
+        let embedHTML = """
+        <!doctype html><html><body>
+        <script id="__NEXT_DATA__" type="application/json">
+        {
+          "props": {
+            "pageProps": {
+              "state": {
+                "data": {
+                  "entity": {
+                    "type": "playlist",
+                    "name": "!2025",
+                    "subtitle": "Bård Ove Myhr",
+                    "coverArt": { "sources": [{ "url": "https://mosaic.scdn.co/640/testcover" }] },
+                    "trackList": [
+                      {
+                        "uri": "spotify:track:sp1",
+                        "title": "Téir Abhaile Riu",
+                        "subtitle": "Celtic Woman",
+                        "duration": 241000,
+                        "isExplicit": false
+                      },
+                      {
+                        "uri": "spotify:track:sp2",
+                        "title": "Isle Of Hope, Isle Of Tears",
+                        "subtitle": "Celtic Woman",
+                        "duration": 302000,
+                        "isExplicit": false
+                      },
+                      {
+                        "uri": "spotify:track:sp3",
+                        "title": "May It Be - Acapella Version",
+                        "subtitle": "Jared Halley,\u{00A0}Rachel Hardy",
+                        "duration": 196000,
+                        "isExplicit": false
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+        </script>
+        </body></html>
+        """
+
+        let payload = try SpotifyPlaylistImporter.parseEmbedHTML(
+            embedHTML,
+            playlistID: "1L9eGmQJXFRN8oL22QtHkA",
+            sourceURL: "https://open.spotify.com/playlist/1L9eGmQJXFRN8oL22QtHkA"
+        )
+        XCTAssertEqual(payload.name, "!2025")
+        XCTAssertEqual(payload.ownerName, "Bård Ove Myhr")
+        XCTAssertEqual(payload.coverURL, "https://mosaic.scdn.co/640/testcover")
+        XCTAssertEqual(payload.tracks.count, 3)
+        XCTAssertEqual(payload.tracks[2].artist, "Jared Halley, Rachel Hardy") // NBSP cleaned
+
+        // Local library contains track #1 (with slightly different diacritic/FLAC) and track #3 (clean title + one artist),
+        // while track #2 is missing!
+        let srcID = UUID()
+        let local1 = Track(
+            id: "local-1",
+            sourceID: srcID,
+            filePath: "/music/Celtic Woman/Decade/01 - Teir Abhaile Riu.flac",
+            fileName: "01 - Teir Abhaile Riu.flac",
+            fileSize: 25_000_000,
+            modifiedAt: Date(),
+            format: .flac,
+            title: "Teir Abhaile Riu",
+            artist: "Celtic Woman",
+            albumArtist: "Celtic Woman",
+            album: "Decade",
+            duration: 241
+        )
+        let local3 = Track(
+            id: "local-3",
+            sourceID: srcID,
+            filePath: "/music/Rachel Hardy/Covers/02 - May It Be.flac",
+            fileName: "02 - May It Be.flac",
+            fileSize: 18_000_000,
+            modifiedAt: Date(),
+            format: .flac,
+            title: "May It Be",
+            artist: "Rachel Hardy",
+            albumArtist: "Rachel Hardy",
+            album: "Covers",
+            duration: 196
+        )
+
+        let results = SpotifyPlaylistImporter.matchTracks(payload.tracks, against: [local1, local3])
+        let report = SpotifyPlaylistMatchReport(payload: payload, entries: results)
+        XCTAssertEqual(report.matchedCount, 2)
+        XCTAssertEqual(report.missingCount, 1)
+
+        let playlist = report.buildPlaylist()
+        // Order must be preserved: [local-1, missing:spotify:sp2, local-3]
+        XCTAssertEqual(playlist.trackIDs.count, 3)
+        XCTAssertEqual(playlist.trackIDs[0], "local-1")
+        XCTAssertTrue(Playlist.isMissingTrackID(playlist.trackIDs[1]))
+        XCTAssertEqual(playlist.trackIDs[2], "local-3")
+        XCTAssertEqual(playlist.playableTrackIDs, ["local-1", "local-3"])
+        XCTAssertEqual(playlist.missingTrackCount, 1)
+        XCTAssertEqual(playlist.missingTracks.first?.title, "Isle Of Hope, Isle Of Tears")
+        XCTAssertEqual(playlist.spotifyPlaylistID, "1L9eGmQJXFRN8oL22QtHkA")
+
+        // Verify SyncPlanner ignores/skips missing track placeholder IDs
+        let dev = DeviceProfile(
+            name: "Echo Mini",
+            mountPath: "/tmp/echo-spotify-test",
+            preset: .fiioEchoMini,
+            selectedPlaylistIDs: [playlist.id]
+        )
+        let resolvedSyncIDs = SyncPlanner.resolveSelectedTrackIDs(
+            profile: dev,
+            allTracks: [local1, local3],
+            playlists: [playlist]
+        )
+        XCTAssertEqual(resolvedSyncIDs, Set(["local-1", "local-3"]))
+
+        // Verify EchoServerSharedPlaylist preserves full trackIDs, missingTracks & Spotify metadata for my-echo-server parity
+        let shared = EchoServerSharedPlaylist(from: playlist)
+        XCTAssertEqual(shared.trackIDs.count, 3)
+        XCTAssertEqual(shared.missingTracks?.count, 1)
+        XCTAssertEqual(shared.spotifyPlaylistID, "1L9eGmQJXFRN8oL22QtHkA")
+
+        // Verify Go-encoded JSON with null slices (e.g. "trackIDs": null, "genres": null) & nanosecond timestamps decodes cleanly
+        let goPayloadJSON = """
+        {
+          "playlists": [
+            {
+              "id": "\(UUID().uuidString)",
+              "name": "Server Empty",
+              "description": "",
+              "trackIDs": null,
+              "createdAt": "2026-11-27T07:37:41.291875285Z",
+              "updatedAt": "2026-11-27T07:37:41.291875285Z"
+            },
+            {
+              "id": "\(UUID().uuidString)",
+              "name": "Server Spotify",
+              "description": "From web UI",
+              "trackIDs": ["local-1", "missing:spotify:abc"],
+              "missingTracks": [{"id":"missing:spotify:abc","title":"Ghost","artist":"Band","lidarrStatus":""}],
+              "spotifyPlaylistID": "abc123",
+              "createdAt": "2026-11-27T07:37:41.291875285Z",
+              "updatedAt": "2026-11-27T07:37:41.291875285Z"
+            }
+          ],
+          "albumEditorial": [
+            {
+              "albumKey": "dark side",
+              "genres": null,
+              "fetchedAt": "2026-11-27T07:37:41.291875285Z"
+            }
+          ]
+        }
+        """
+        let isoDec = JSONDecoder()
+        let frac = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+        let std = Date.ISO8601FormatStyle(includingFractionalSeconds: false)
+        isoDec.dateDecodingStrategy = .custom { dec in
+            let c = try dec.singleValueContainer()
+            let str = try c.decode(String.self)
+            if let dt = try? frac.parse(str) { return dt }
+            if let dt = try? std.parse(str) { return dt }
+            throw DecodingError.dataCorruptedError(in: c, debugDescription: "Invalid date: \(str)")
+        }
+        let decodedGoState = try isoDec.decode(EchoServerSharedStatePayload.self, from: Data(goPayloadJSON.utf8))
+        XCTAssertEqual(decodedGoState.playlists?.count, 2)
+        XCTAssertEqual(decodedGoState.playlists?[0].trackIDs, [])
+        XCTAssertEqual(decodedGoState.playlists?[1].missingTracks?.first?.lidarrStatus, .missing)
+        XCTAssertEqual(decodedGoState.playlists?[1].spotifyPlaylistID, "abc123")
+        XCTAssertEqual(decodedGoState.albumEditorial?.first?.genres, [])
+
+        // Now simulate Lidarr downloading track #2 and library indexing it -> verify in-place resolution!
+        let local2Downloaded = Track(
+            id: "local-2",
+            sourceID: srcID,
+            filePath: "/music/Celtic Woman/Voices of Angels/05 - Isle Of Hope, Isle Of Tears.flac",
+            fileName: "05 - Isle Of Hope, Isle Of Tears.flac",
+            fileSize: 30_000_000,
+            modifiedAt: Date(),
+            format: .flac,
+            title: "Isle Of Hope, Isle Of Tears",
+            artist: "Celtic Woman",
+            albumArtist: "Celtic Woman",
+            album: "Voices of Angels",
+            duration: 302
+        )
+        let (resolvedPlaylist, resolvedCount) = SpotifyPlaylistImporter.resolveMissingTracks(
+            in: playlist,
+            against: [local1, local2Downloaded, local3]
+        )
+        XCTAssertEqual(resolvedCount, 1)
+        XCTAssertEqual(resolvedPlaylist.trackIDs, ["local-1", "local-2", "local-3"])
+        XCTAssertEqual(resolvedPlaylist.missingTrackCount, 0)
+        XCTAssertTrue(resolvedPlaylist.missingTracks.isEmpty)
+
+        // Verify backwards-compatible Codable decoding of legacy Playlist JSON without new fields
+        let legacyJSON = """
+        {"id":"\(UUID().uuidString)","name":"Legacy Mix","description":"Old","trackIDs":["local-1"],"createdAt":1700000000,"updatedAt":1700000000}
+        """
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .secondsSince1970
+        let decodedLegacy = try dec.decode(Playlist.self, from: Data(legacyJSON.utf8))
+        XCTAssertEqual(decodedLegacy.name, "Legacy Mix")
+        XCTAssertEqual(decodedLegacy.missingTracks.count, 0)
+        XCTAssertNil(decodedLegacy.spotifyPlaylistID)
+    }
+
+    func testEchoServerBidirectionalPlaylistMergeAndTombstones() {
+        let t0 = Date(timeIntervalSince1970: 1_750_000_000)
+        let t1 = Date(timeIntervalSince1970: 1_750_000_100)
+        let t2 = Date(timeIntervalSince1970: 1_750_000_200)
+
+        let missingPlaceholder = MissingPlaylistTrack(
+            title: "Missing Song",
+            artist: "Artist",
+            spotifyTrackID: "sp99"
+        )
+
+        // 1. Local Spotify playlist with retained missing track (same-second round-trip should NOT clobber missingTracks)
+        let spotifyID = UUID()
+        let localSpotify = Playlist(
+            id: spotifyID,
+            name: "Roadtrip",
+            description: "Spotify import",
+            trackIDs: ["t1", missingPlaceholder.id, "t2"],
+            missingTracks: [missingPlaceholder],
+            spotifyPlaylistID: "spList1",
+            spotifySourceURL: "https://open.spotify.com/playlist/spList1",
+            createdAt: t0,
+            updatedAt: Date(timeIntervalSince1970: 1_750_000_100.75) // sub-second precision
+        )
+
+        // 2. Local playlist that will be updated by a strictly newer remote version
+        let updatedID = UUID()
+        let localStale = Playlist(
+            id: updatedID,
+            name: "Old Name",
+            description: "Old",
+            trackIDs: ["t1"],
+            createdAt: t0,
+            updatedAt: t0
+        )
+
+        // 3. Local playlist that is newer than remote (should NOT be overwritten)
+        let localNewerID = UUID()
+        let localNewer = Playlist(
+            id: localNewerID,
+            name: "Local Wins",
+            description: "Fresh local edit",
+            trackIDs: ["t1", "t2", "t3"],
+            createdAt: t0,
+            updatedAt: t2
+        )
+
+        // 4. Local playlist deleted remotely
+        let remoteDeletedID = UUID()
+        let localToBeDeleted = Playlist(
+            id: remoteDeletedID,
+            name: "Delete Me",
+            trackIDs: ["t1"],
+            createdAt: t0,
+            updatedAt: t0
+        )
+
+        // 5. Protected Partymode playlist
+        let partyID = UUID()
+        let partyPl = Playlist(
+            id: partyID,
+            name: "Partymode",
+            trackIDs: ["t1"],
+            createdAt: t0,
+            updatedAt: t0
+        )
+
+        // 6. Local deletion tombstones: one older remote snapshot (must NOT resurrect), one acknowledged by server (must clear)
+        let localDeletedNotYetAckedID = UUID()
+        let localDeletedAckedID = UUID()
+        let localTombstones: [String: Date] = [
+            localDeletedNotYetAckedID.uuidString: t2,
+            localDeletedAckedID.uuidString: t1
+        ]
+
+        // Outgoing payload includes syncable playlists + deletion tombstones
+        let outgoing = EchoServerPlaylistMerger.outgoingPayload(
+            syncablePlaylists: [localSpotify, localStale, localNewer, localToBeDeleted],
+            localTombstones: localTombstones
+        )
+        XCTAssertEqual(outgoing.count, 6)
+        XCTAssertTrue(outgoing.contains(where: { $0.id == localDeletedNotYetAckedID.uuidString && $0.deleted == true }))
+
+        // 7. Brand new remote playlist created on another device / server
+        let brandNewRemoteID = UUID()
+
+        let remotePayloads: [EchoServerSharedPlaylist] = [
+            // Same-second echo of localSpotify (ISO8601 truncated sub-seconds)
+            EchoServerSharedPlaylist(id: spotifyID.uuidString, name: "Roadtrip", description: "Spotify import", trackIDs: ["t1", "t2"], createdAt: t0, updatedAt: t1),
+            // Strictly newer remote edit for localStale
+            EchoServerSharedPlaylist(id: updatedID.uuidString, name: "New Name", description: "Updated on server", trackIDs: ["t1", "t4"], createdAt: t0, updatedAt: t2),
+            // Older remote copy for localNewer
+            EchoServerSharedPlaylist(id: localNewerID.uuidString, name: "Stale Server", description: "Old", trackIDs: ["t1"], createdAt: t0, updatedAt: t1),
+            // Remote deletion tombstone for localToBeDeleted
+            EchoServerSharedPlaylist(id: remoteDeletedID.uuidString, name: "", trackIDs: [], createdAt: t0, updatedAt: t1, deleted: true),
+            // Remote stale copy of a locally deleted playlist (must NOT resurrect!)
+            EchoServerSharedPlaylist(id: localDeletedNotYetAckedID.uuidString, name: "Ghost", trackIDs: ["t9"], createdAt: t0, updatedAt: t1),
+            // Server acknowledgement of localDeletedAckedID
+            EchoServerSharedPlaylist(id: localDeletedAckedID.uuidString, name: "", trackIDs: [], createdAt: t0, updatedAt: t1, deleted: true),
+            // Attempted remote overwrite of Partymode (must be ignored)
+            EchoServerSharedPlaylist(id: partyID.uuidString, name: "Partymode", trackIDs: ["t9"], createdAt: t0, updatedAt: t2),
+            // Brand new playlist from server
+            EchoServerSharedPlaylist(id: brandNewRemoteID.uuidString, name: "Server Mix", description: "From Web/Mac2", trackIDs: ["t2", "t3"], createdAt: t1, updatedAt: t1)
+        ]
+
+        let result = EchoServerPlaylistMerger.merge(
+            localPlaylists: [localSpotify, localStale, localNewer, localToBeDeleted, partyPl],
+            remotePlaylists: remotePayloads,
+            localTombstones: localTombstones,
+            protectedPlaylistIDs: [partyID],
+            now: t2
+        )
+
+        XCTAssertTrue(result.didChange)
+        // localToBeDeleted removed, brandNewRemoteID added -> still 5 playlists total
+        XCTAssertEqual(result.playlists.count, 5)
+        XCTAssertEqual(result.deletedPlaylistIDs, [remoteDeletedID])
+
+        // Verify localSpotify kept its missing track placeholder intact and was NOT needlessly saved
+        let mergedSpotify = try? XCTUnwrap(result.playlists.first(where: { $0.id == spotifyID }))
+        XCTAssertEqual(mergedSpotify?.trackIDs, ["t1", missingPlaceholder.id, "t2"])
+        XCTAssertEqual(mergedSpotify?.missingTracks.count, 1)
+        XCTAssertFalse(result.savedPlaylists.contains(where: { $0.id == spotifyID }))
+
+        // Verify localStale was updated
+        let mergedUpdated = try? XCTUnwrap(result.playlists.first(where: { $0.id == updatedID }))
+        XCTAssertEqual(mergedUpdated?.name, "New Name")
+        XCTAssertEqual(mergedUpdated?.trackIDs, ["t1", "t4"])
+
+        // Verify localNewer won over older remote
+        let mergedNewer = try? XCTUnwrap(result.playlists.first(where: { $0.id == localNewerID }))
+        XCTAssertEqual(mergedNewer?.name, "Local Wins")
+        XCTAssertEqual(mergedNewer?.trackIDs, ["t1", "t2", "t3"])
+
+        // Verify brandNewRemoteID was imported
+        let mergedNew = try? XCTUnwrap(result.playlists.first(where: { $0.id == brandNewRemoteID }))
+        XCTAssertEqual(mergedNew?.name, "Server Mix")
+        XCTAssertEqual(mergedNew?.trackIDs, ["t2", "t3"])
+
+        // Verify Partymode was untouched
+        let mergedParty = try? XCTUnwrap(result.playlists.first(where: { $0.id == partyID }))
+        XCTAssertEqual(mergedParty?.trackIDs, ["t1"])
+
+        // Verify locally deleted playlist was NOT resurrected, and acked tombstone was pruned
+        XCTAssertNil(result.playlists.first(where: { $0.id == localDeletedNotYetAckedID }))
+        XCTAssertNotNil(result.remainingTombstones[localDeletedNotYetAckedID.uuidString])
+        XCTAssertNil(result.remainingTombstones[localDeletedAckedID.uuidString])
+    }
+
     private func appendSynchsafe(_ d: inout Data, _ v: Int) {
         d.append(contentsOf: [
             UInt8((v >> 21) & 0x7F),

@@ -197,18 +197,243 @@ public struct EchoServerSharedPlaylist: Codable, Sendable {
     public var name: String
     public var description: String
     public var trackIDs: [String]
+    public var missingTracks: [MissingPlaylistTrack]?
+    public var spotifyPlaylistID: String?
+    public var spotifySourceURL: String?
     public var createdAt: Date
     public var updatedAt: Date
     public var deleted: Bool?
 
-    public init(from pl: Playlist, deleted: Bool = false) {
+    public init(
+        id: String,
+        name: String,
+        description: String = "",
+        trackIDs: [String] = [],
+        missingTracks: [MissingPlaylistTrack]? = nil,
+        spotifyPlaylistID: String? = nil,
+        spotifySourceURL: String? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date(),
+        deleted: Bool? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.trackIDs = trackIDs
+        self.missingTracks = missingTracks
+        self.spotifyPlaylistID = spotifyPlaylistID
+        self.spotifySourceURL = spotifySourceURL
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.deleted = deleted
+    }
+
+    public init(from pl: Playlist, deleted: Bool = false, updatedAt: Date? = nil) {
         self.id = pl.id.uuidString
         self.name = pl.name
         self.description = pl.description
-        self.trackIDs = pl.trackIDs
+        self.trackIDs = deleted ? [] : pl.trackIDs
+        self.missingTracks = (deleted || pl.missingTracks.isEmpty) ? nil : pl.missingTracks
+        self.spotifyPlaylistID = deleted ? nil : pl.spotifyPlaylistID
+        self.spotifySourceURL = deleted ? nil : pl.spotifySourceURL
         self.createdAt = pl.createdAt
-        self.updatedAt = pl.updatedAt
+        self.updatedAt = updatedAt ?? pl.updatedAt
         self.deleted = deleted ? true : nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, description, trackIDs, missingTracks, spotifyPlaylistID, spotifySourceURL
+        case createdAt, updatedAt, deleted
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        description = try c.decodeIfPresent(String.self, forKey: .description) ?? ""
+        trackIDs = try c.decodeIfPresent([String].self, forKey: .trackIDs) ?? []
+        missingTracks = try c.decodeIfPresent([MissingPlaylistTrack].self, forKey: .missingTracks)
+        let spID = try c.decodeIfPresent(String.self, forKey: .spotifyPlaylistID)
+        spotifyPlaylistID = (spID?.isEmpty == false) ? spID : nil
+        let spURL = try c.decodeIfPresent(String.self, forKey: .spotifySourceURL)
+        spotifySourceURL = (spURL?.isEmpty == false) ? spURL : nil
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        deleted = try c.decodeIfPresent(Bool.self, forKey: .deleted)
+    }
+}
+
+public struct EchoServerPlaylistMergeResult: Sendable {
+    public var playlists: [Playlist]
+    public var savedPlaylists: [Playlist]
+    public var deletedPlaylistIDs: [UUID]
+    public var remainingTombstones: [String: Date]
+    public var tombstonesChanged: Bool
+
+    public var didChange: Bool {
+        !savedPlaylists.isEmpty || !deletedPlaylistIDs.isEmpty
+    }
+}
+
+/// Deterministic last-write-wins bidirectional playlist merger between macOS local SQLite and Echo Server.
+/// Preserves local-only Spotify missing-track placeholders & metadata when playable tracks haven't diverged,
+/// and honors deletion tombstones using whole-second Unix timestamps matching Echo Server's SQLite schema.
+public enum EchoServerPlaylistMerger {
+    private static let tombstoneRetentionSeconds: TimeInterval = 90 * 24 * 60 * 60
+
+    public static func outgoingPayload(
+        syncablePlaylists: [Playlist],
+        localTombstones: [String: Date]
+    ) -> [EchoServerSharedPlaylist] {
+        var out = syncablePlaylists.map { EchoServerSharedPlaylist(from: $0) }
+        let liveIDs = Set(syncablePlaylists.map { $0.id.uuidString.uppercased() })
+        for (rawID, deletedAt) in localTombstones {
+            let normalized = UUID(uuidString: rawID)?.uuidString ?? rawID
+            if liveIDs.contains(normalized.uppercased()) { continue }
+            out.append(EchoServerSharedPlaylist(
+                id: normalized,
+                name: "",
+                description: "",
+                trackIDs: [],
+                createdAt: deletedAt,
+                updatedAt: deletedAt,
+                deleted: true
+            ))
+        }
+        return out
+    }
+
+    public static func merge(
+        localPlaylists: [Playlist],
+        remotePlaylists: [EchoServerSharedPlaylist],
+        localTombstones: [String: Date],
+        protectedPlaylistIDs: Set<UUID> = [],
+        partyPlaylistName: String = "Partymode",
+        now: Date = Date()
+    ) -> EchoServerPlaylistMergeResult {
+        var merged = localPlaylists
+        var saved: [Playlist] = []
+        var deletedIDs: [UUID] = []
+
+        // Normalize tombstone keys to canonical uppercase UUID strings
+        var tombstones: [String: Date] = [:]
+        for (k, v) in localTombstones {
+            let normKey = UUID(uuidString: k)?.uuidString ?? k
+            if let existing = tombstones[normKey] {
+                tombstones[normKey] = max(existing, v)
+            } else {
+                tombstones[normKey] = v
+            }
+        }
+        let initialTombstones = tombstones
+
+        for remote in remotePlaylists {
+            guard let uuid = UUID(uuidString: remote.id) else { continue }
+            let key = uuid.uuidString
+            if protectedPlaylistIDs.contains(uuid) { continue }
+
+            let remoteSec = Int64(remote.updatedAt.timeIntervalSince1970)
+            let localIndex = merged.firstIndex(where: { $0.id == uuid })
+
+            if let idx = localIndex,
+               merged[idx].name.caseInsensitiveCompare(partyPlaylistName) == .orderedSame {
+                continue
+            }
+
+            if remote.deleted == true {
+                if let idx = localIndex {
+                    let localSec = Int64(merged[idx].updatedAt.timeIntervalSince1970)
+                    if remoteSec >= localSec {
+                        merged.remove(at: idx)
+                        deletedIDs.append(uuid)
+                        if let existingTomb = tombstones[key], existingTomb <= remote.updatedAt {
+                            tombstones.removeValue(forKey: key)
+                        }
+                    }
+                } else if let existingTomb = tombstones[key] {
+                    // Server already acknowledged this deletion tombstone
+                    if Int64(remote.updatedAt.timeIntervalSince1970) >= Int64(existingTomb.timeIntervalSince1970) {
+                        tombstones.removeValue(forKey: key)
+                    }
+                }
+                continue
+            }
+
+            // Never import a remote playlist named Partymode
+            if remote.name.caseInsensitiveCompare(partyPlaylistName) == .orderedSame {
+                continue
+            }
+
+            // Respect local deletion tombstone unless remote is strictly newer
+            if let tombDate = tombstones[key] {
+                let tombSec = Int64(tombDate.timeIntervalSince1970)
+                if tombSec >= remoteSec {
+                    continue
+                }
+                tombstones.removeValue(forKey: key)
+            }
+
+            if let idx = localIndex {
+                let local = merged[idx]
+                let localSec = Int64(local.updatedAt.timeIntervalSince1970)
+                if remoteSec > localSec {
+                    var updated = local
+                    updated.name = remote.name
+                    updated.description = remote.description
+                    updated.updatedAt = remote.updatedAt
+                    let remoteCarriesMissing = (remote.missingTracks != nil)
+                        || remote.trackIDs.contains(where: Playlist.isMissingTrackID)
+                    if remoteCarriesMissing {
+                        updated.trackIDs = remote.trackIDs
+                        updated.missingTracks = remote.missingTracks ?? []
+                    } else if local.playableTrackIDs != remote.trackIDs {
+                        if local.missingTracks.isEmpty {
+                            updated.trackIDs = remote.trackIDs
+                        } else {
+                            let activeMissing = local.trackIDs.filter { Playlist.isMissingTrackID($0) }
+                            updated.trackIDs = remote.trackIDs + activeMissing
+                        }
+                    }
+                    if let spID = remote.spotifyPlaylistID {
+                        updated.spotifyPlaylistID = spID
+                    }
+                    if let spURL = remote.spotifySourceURL {
+                        updated.spotifySourceURL = spURL
+                    }
+                    merged[idx] = updated
+                    saved.append(updated)
+                }
+            } else {
+                let created = Playlist(
+                    id: uuid,
+                    name: remote.name,
+                    description: remote.description,
+                    trackIDs: remote.trackIDs,
+                    missingTracks: remote.missingTracks ?? [],
+                    spotifyPlaylistID: remote.spotifyPlaylistID,
+                    spotifySourceURL: remote.spotifySourceURL,
+                    createdAt: remote.createdAt,
+                    updatedAt: remote.updatedAt
+                )
+                merged.append(created)
+                saved.append(created)
+            }
+        }
+
+        // Prune expired tombstones older than 90 days
+        let cutoff = now.addingTimeInterval(-tombstoneRetentionSeconds)
+        tombstones = tombstones.filter { $0.value >= cutoff }
+
+        let tombstonesChanged = tombstones.count != initialTombstones.count
+            || tombstones.contains { k, v in initialTombstones[k] != v }
+
+        return EchoServerPlaylistMergeResult(
+            playlists: merged,
+            savedPlaylists: saved,
+            deletedPlaylistIDs: deletedIDs,
+            remainingTombstones: tombstones,
+            tombstonesChanged: tombstonesChanged
+        )
     }
 }
 
@@ -236,6 +461,25 @@ public struct EchoServerSharedTrackStats: Codable, Sendable {
         self.onlineFetchedAt = s.onlineFetchedAt
         self.updatedAt = updatedAt
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case trackID, userPlayCount, lastPlayedAt, userRating, onlinePopularity
+        case onlinePlayCount, onlineListeners, onlineSource, onlineFetchedAt, updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        trackID = try c.decode(String.self, forKey: .trackID)
+        userPlayCount = try c.decodeIfPresent(Int.self, forKey: .userPlayCount) ?? 0
+        lastPlayedAt = try c.decodeIfPresent(Date.self, forKey: .lastPlayedAt)
+        userRating = try c.decodeIfPresent(Int.self, forKey: .userRating)
+        onlinePopularity = try c.decodeIfPresent(Int.self, forKey: .onlinePopularity)
+        onlinePlayCount = try c.decodeIfPresent(Int.self, forKey: .onlinePlayCount)
+        onlineListeners = try c.decodeIfPresent(Int.self, forKey: .onlineListeners)
+        onlineSource = try c.decodeIfPresent(String.self, forKey: .onlineSource)
+        onlineFetchedAt = try c.decodeIfPresent(Date.self, forKey: .onlineFetchedAt)
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+    }
 }
 
 public struct EchoServerSharedAlbumRating: Codable, Sendable {
@@ -249,6 +493,18 @@ public struct EchoServerSharedAlbumRating: Codable, Sendable {
         self.rating = r.rating
         self.updatedAt = r.updatedAt
         self.deleted = deleted ? true : nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case albumKey, rating, updatedAt, deleted
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        albumKey = try c.decode(String.self, forKey: .albumKey)
+        rating = try c.decodeIfPresent(Int.self, forKey: .rating) ?? 0
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        deleted = try c.decodeIfPresent(Bool.self, forKey: .deleted)
     }
 }
 
@@ -277,6 +533,26 @@ public struct EchoServerSharedPodcastFeed: Codable, Sendable {
         self.isSelectedForAutoSync = true
         self.updatedAt = updatedAt
         self.deleted = nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, author, description, feedURL, artworkURL, artworkHash
+        case episodesToKeep, isSelectedForAutoSync, updatedAt, deleted
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        author = try c.decodeIfPresent(String.self, forKey: .author) ?? ""
+        description = try c.decodeIfPresent(String.self, forKey: .description) ?? ""
+        feedURL = try c.decodeIfPresent(String.self, forKey: .feedURL) ?? ""
+        artworkURL = try c.decodeIfPresent(String.self, forKey: .artworkURL)
+        artworkHash = try c.decodeIfPresent(String.self, forKey: .artworkHash)
+        episodesToKeep = try c.decodeIfPresent(Int.self, forKey: .episodesToKeep) ?? 5
+        isSelectedForAutoSync = try c.decodeIfPresent(Bool.self, forKey: .isSelectedForAutoSync) ?? true
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        deleted = try c.decodeIfPresent(Bool.self, forKey: .deleted)
     }
 }
 
