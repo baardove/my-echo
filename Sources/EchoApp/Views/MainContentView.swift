@@ -55,6 +55,9 @@ struct MainContentView: View {
             .ignoresSafeArea()
         }
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $bindableStore.showSpotifyImportSheet) {
+            SpotifyImportSheet()
+        }
     }
 
     private func topBar(searchBinding: Binding<String>) -> some View {
@@ -291,6 +294,9 @@ struct MainContentView: View {
                         .action(title: "Create First Playlist", icon: "plus") {
                             let pl = store.createPlaylist(name: "My Playlist")
                             store.navigate(to: .playlist(pl.id))
+                        },
+                        .action(title: "Import Spotify Playlist...", icon: "waveform.badge.plus") {
+                            store.showSpotifyImportSheet = true
                         }
                     ]
                 }
@@ -308,6 +314,9 @@ struct MainContentView: View {
                 items.append(.action(title: "New Playlist", icon: "plus") {
                     let pl = store.createPlaylist(name: "Playlist \(store.playlists.count + 1)")
                     store.navigate(to: .playlist(pl.id))
+                })
+                items.append(.action(title: "Import Spotify Playlist...", icon: "waveform.badge.plus") {
+                    store.showSpotifyImportSheet = true
                 })
                 return items
             } label: { isHovered in
@@ -504,6 +513,8 @@ struct MainContentView: View {
                 AlbumDetailView(albumKey: key)
             case .tracks:
                 TracksView()
+            case .playlists:
+                PlaylistsView()
             case .podcasts:
                 PodcastsView()
             case .podcastDetail(let id):
@@ -768,7 +779,9 @@ struct GlobalSearchResultsView: View {
                                                     .font(.system(size: 13, weight: .bold))
                                                     .foregroundStyle(EchoTheme.textPrimary)
                                                     .lineLimit(1)
-                                                Text("\(pl.trackIDs.count) tracks")
+                                                let playableCount = pl.playableTrackIDs.count
+                                                let missingCount = pl.missingTrackCount
+                                                Text(missingCount > 0 ? "\(playableCount) tracks · \(missingCount) missing" : "\(playableCount) tracks")
                                                     .font(.system(size: 10.5, design: .monospaced))
                                                     .foregroundStyle(EchoTheme.textMuted)
                                             }

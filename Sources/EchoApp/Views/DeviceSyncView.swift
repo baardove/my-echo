@@ -941,7 +941,9 @@ struct DeviceSyncView: View {
                                                 .font(.system(size: 13, weight: .bold))
                                                 .foregroundStyle(isIncluded ? EchoTheme.textPrimary : EchoTheme.textSecondary)
                                                 .lineLimit(1)
-                                            Text("\(playlist.trackIDs.count) tracks")
+                                            let playableCount = playlist.playableTrackIDs.count
+                                            let missingCount = playlist.missingTrackCount
+                                            Text(missingCount > 0 ? "\(playableCount) tracks (\(missingCount) missing skipped)" : "\(playableCount) tracks")
                                                 .font(.system(size: 10.5, design: .monospaced))
                                                 .foregroundStyle(isIncluded ? EchoTheme.neoMint : EchoTheme.textMuted)
                                         }

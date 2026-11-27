@@ -42,6 +42,7 @@ struct SidebarView: View {
                         sidebarRow(icon: "person.2.fill", title: "Artists", count: store.artists.count, destination: .artists, tip: "Browse artists in '\(store.selectedLibraryDisplayName)'. Drag or toggle entire artists to sync.")
                         sidebarRow(icon: "square.stack.fill", title: "Albums", count: store.albums.count, destination: .albums, tip: "Browse albums in '\(store.selectedLibraryDisplayName)' with cover art and path previews.")
                         sidebarRow(icon: "music.note", title: "Tracks", count: store.scopedTracks.count, destination: .tracks, tip: "View every track inside '\(store.selectedLibraryDisplayName)'.")
+                        sidebarRow(icon: "music.note.list", title: "Playlists", count: store.playlists.count, destination: .playlists, tip: "Browse all playlists as artwork mosaic cards, play, sync, or organize them.")
                         sidebarPartyModeRow
                         sidebarRow(icon: "mic.fill", title: "Podcasts", count: store.podcasts.count, destination: .podcasts, tip: "Search podcast directories, subscribe via RSS, download episodes, and sync to single or multiple players.")
                         if store.lidarrConfig.isEnabled {
@@ -123,9 +124,31 @@ struct SidebarView: View {
 
                     // Playlists Section
                     VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            sidebarSectionTitle("PLAYLISTS")
+                        HStack(spacing: 5) {
+                            Button {
+                                store.clearGlobalSearch()
+                                store.isLidarrLibraryScope = false
+                                store.navigate(to: .playlists)
+                            } label: {
+                                sidebarSectionTitle("PLAYLISTS")
+                            }
+                            .buttonStyle(.plain)
+                            .help("Open Playlists card grid view.")
                             Spacer()
+                            Button {
+                                store.showSpotifyImportSheet = true
+                            } label: {
+                                Image(systemName: "waveform.badge.plus")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(EchoTheme.neoMint)
+                                    .frame(width: 22, height: 22)
+                                    .background(EchoTheme.neoMint.opacity(0.14))
+                                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                    .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(EchoTheme.neoMint.opacity(0.35), lineWidth: 0.8))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Import a public Spotify playlist by URL (⌘⇧I) — retains missing tracks and supports automatic Lidarr search.")
+
                             Button {
                                 newPlaylistName = ""
                                 newPlaylistDesc = ""
@@ -358,10 +381,17 @@ struct SidebarView: View {
             Rectangle().fill(EchoTheme.border).frame(width: 1)
         }
         .sheet(isPresented: $showNewPlaylistSheet) {
-            NewPlaylistSheet(name: $newPlaylistName, description: $newPlaylistDesc) {
-                let pl = store.createPlaylist(name: newPlaylistName, description: newPlaylistDesc)
-                store.navigate(to: .playlist(pl.id))
-            }
+            NewPlaylistSheet(
+                name: $newPlaylistName,
+                description: $newPlaylistDesc,
+                onCreate: {
+                    let pl = store.createPlaylist(name: newPlaylistName, description: newPlaylistDesc)
+                    store.navigate(to: .playlist(pl.id))
+                },
+                onImportSpotify: {
+                    store.showSpotifyImportSheet = true
+                }
+            )
         }
     }
 
@@ -559,7 +589,11 @@ private struct SidebarPlaylistDropRow: View {
                             }
                         }
 
-                        Text(isDropTargeted ? "Drop to add tracks" : "\(playlist.trackIDs.count) tracks")
+                        let playableCount = playlist.playableTrackIDs.count
+                        let missingCount = playlist.missingTrackCount
+                        Text(isDropTargeted
+                             ? "Drop to add tracks"
+                             : (missingCount > 0 ? "\(playableCount) tracks · \(missingCount) missing" : "\(playableCount) tracks"))
                             .font(.system(size: 10))
                             .foregroundStyle(isDropTargeted ? EchoTheme.neoMint : EchoTheme.textMuted)
                     }
@@ -634,6 +668,21 @@ private struct SidebarPlaylistDropRow: View {
                 }
             }
             Divider()
+            if playlist.missingTrackCount > 0 {
+                if store.lidarrConfig.isConfigured {
+                    Button("Auto-Search Missing in Lidarr (\(playlist.missingTrackCount))") {
+                        store.autoSearchMissingTracksInLidarr(playlistID: playlist.id)
+                    }
+                }
+                Button("Re-Match Missing Tracks in Library") {
+                    store.reMatchMissingTracks(forPlaylistID: playlist.id)
+                }
+            }
+            if playlist.spotifyPlaylistID != nil {
+                Button("Re-Sync from Spotify") {
+                    store.resyncSpotifyPlaylist(playlist)
+                }
+            }
             Button("Duplicate Playlist") {
                 store.duplicatePlaylist(playlist)
             }
@@ -959,6 +1008,7 @@ struct NewPlaylistSheet: View {
     @Binding var name: String
     @Binding var description: String
     let onCreate: () -> Void
+    var onImportSpotify: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -984,6 +1034,20 @@ struct NewPlaylistSheet: View {
             }
 
             HStack {
+                if let onImportSpotify {
+                    Button {
+                        dismiss()
+                        onImportSpotify()
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "waveform.badge.plus")
+                            Text("Import Spotify URL...")
+                        }
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(EchoTheme.neoMint)
+                    }
+                    .buttonStyle(.plain)
+                }
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
@@ -995,7 +1059,7 @@ struct NewPlaylistSheet: View {
             }
         }
         .padding(22)
-        .frame(width: 380)
+        .frame(width: 400)
         .background(EchoTheme.surface)
     }
 }

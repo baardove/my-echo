@@ -148,6 +148,15 @@ enum AlbumSortOrder: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum PlaylistSortOrder: String, CaseIterable, Identifiable {
+    case recentlyUpdated = "Recently Updated"
+    case name = "A–Z"
+    case mostTracks = "Most Tracks"
+    case longest = "Longest"
+    case newestCreated = "Newest"
+    var id: String { rawValue }
+}
+
 enum AutoIndexInterval: String, CaseIterable, Identifiable {
     case off
     case every5Min
@@ -201,6 +210,7 @@ enum NavDestination: Hashable {
     case albums
     case albumDetail(String)  // albumKey
     case tracks
+    case playlists
     case podcasts
     case podcastDetail(UUID)
     case playlist(UUID)
@@ -242,6 +252,7 @@ final class EchoStore {
     let podcastService: PodcastService
     let popularityService: OnlinePopularityService
     let lidarrClient: LidarrClient
+    let spotifyImporter: SpotifyPlaylistImporter
     let wirelessSyncServer: WirelessSyncServer
     let partyModeServer: PartyModeServer
     let syncEngine: SyncEngine
@@ -258,6 +269,7 @@ final class EchoStore {
     var trackSortAscending: Bool = true
     var trackTableColumn: TrackTableSortColumn? = nil
     var albumSortOrder: AlbumSortOrder = .title
+    var playlistSortOrder: PlaylistSortOrder = .recentlyUpdated
 
     // Settings
     var destinationMode: DestinationMode = .single
@@ -313,6 +325,14 @@ final class EchoStore {
     var tracks: [Track] = []
     var playlists: [Playlist] = []
     var focusedPlaylistID: UUID?
+
+    // Spotify Playlist Importer & Missing-Track Lidarr Auto-Search State
+    var showSpotifyImportSheet: Bool = false
+    var isSearchingMissingTracksInLidarr: Bool = false
+    var activeLidarrMissingSearchPlaylistID: UUID? = nil
+    var lidarrMissingSearchProgress: (done: Int, total: Int, currentTrack: String)? = nil
+    private var lidarrMissingSearchTask: Task<Void, Never>?
+    var resyncingSpotifyPlaylistIDs: Set<UUID> = []
 
     // Podcasts State
     var podcasts: [PodcastShow] = []
@@ -416,8 +436,14 @@ final class EchoStore {
     private var syncTask: Task<Void, Never>?
     private var autoIndexTask: Task<Void, Never>?
     private var editorialSyncTask: Task<Void, Never>?
+    private var echoServerSharedStateTask: Task<Void, Never>?
+    private var echoServerPlaylistPushTask: Task<Void, Never>?
+    private var pendingEchoServerPlaylistIDs: Set<UUID> = []
+    private var deletedPlaylistTombstones: [String: Date] = [:]
+    private var lastEchoServerSharedStateSyncAt: Date? = nil
     private var volumeObservers: [NSObjectProtocol] = []
     private var terminationObserver: NSObjectProtocol?
+    private var appDidBecomeActiveObserver: NSObjectProtocol?
 
     init() {
         self.artworkCache = ArtworkCache()
@@ -426,6 +452,7 @@ final class EchoStore {
         self.podcastService = PodcastService(artworkCache: artworkCache)
         self.popularityService = OnlinePopularityService()
         self.lidarrClient = LidarrClient()
+        self.spotifyImporter = SpotifyPlaylistImporter()
         self.wirelessSyncServer = WirelessSyncServer(artworkCache: artworkCache)
         self.partyModeServer = PartyModeServer(artworkCache: artworkCache)
         self.syncEngine = SyncEngine(artworkCache: artworkCache, podcastService: podcastService)
@@ -439,6 +466,7 @@ final class EchoStore {
         startVolumeMonitoring()
         refreshWirelessSyncServer()
         restartAutoIndexScheduler()
+        restartEchoServerSharedStateScheduler()
         startOccasionalEditorialSync()
         if lidarrConfig.isEnabled && lidarrConfig.isConfigured {
             testLidarrConnection(silent: true)
@@ -919,6 +947,14 @@ final class EchoStore {
             echoServerConfig = decoded
             echoServerStatusText = decoded.isEnabled ? "Configured (\(decoded.serverName))" : "Disabled (Standalone Mac Mode)"
         }
+        if let rawTombstones = database.getSetting("deletedPlaylistTombstones"),
+           let data = rawTombstones.data(using: .utf8) {
+            let dec = JSONDecoder()
+            dec.dateDecodingStrategy = .secondsSince1970
+            if let decoded = try? dec.decode([String: Date].self, from: data) {
+                deletedPlaylistTombstones = decoded
+            }
+        }
 
         rebuildLibraryGroups()
         rebuildEpisodeMap()
@@ -1011,6 +1047,22 @@ final class EchoStore {
             Task { @MainActor [weak self] in
                 self?.persistPlaybackQueue()
                 self?.partyModeServer.stop()
+            }
+        }
+        appDidBecomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.echoServerConfig.isConfigured,
+                      self.echoServerConfig.syncSharedState else { return }
+                if let last = self.lastEchoServerSharedStateSyncAt,
+                   Date().timeIntervalSince(last) < 30 {
+                    return
+                }
+                await self.syncSharedStateWithEchoServer(silent: true)
             }
         }
     }
@@ -1108,6 +1160,14 @@ final class EchoStore {
         if isPartyModeEnabled {
             partyModeServer.updateLibrary(tracks: tracks)
             pushPartyModeStateToServer()
+        }
+
+        // Automatically resolve any retained missing playlist tracks that just appeared in the indexed library
+        if !tracks.isEmpty && playlists.contains(where: { !$0.missingTracks.isEmpty }) {
+            let resolved = resolveMissingTracksAcrossPlaylists(silent: true)
+            if resolved > 0 {
+                showToast("Matched \(resolved) previously missing playlist track\(resolved == 1 ? "" : "s") from your library!")
+            }
         }
     }
 
@@ -1457,6 +1517,7 @@ final class EchoStore {
     // MARK: - Optional Echo Server (Unraid / Docker) Methods
 
     func saveEchoServerConfig(_ config: EchoServerConfig) {
+        let previous = echoServerConfig
         echoServerConfig = config
         if let data = try? JSONEncoder().encode(config),
            let str = String(data: data, encoding: .utf8) {
@@ -1465,6 +1526,158 @@ final class EchoStore {
         if !config.isEnabled {
             echoServerStatusText = "Disabled (Standalone Mac Mode)"
             echoServerError = nil
+        }
+        let syncConfigChanged = previous.isEnabled != config.isEnabled
+            || previous.syncSharedState != config.syncSharedState
+            || previous.lanURL != config.lanURL
+            || previous.tailscaleURL != config.tailscaleURL
+            || previous.pairingPIN != config.pairingPIN
+        if syncConfigChanged {
+            restartEchoServerSharedStateScheduler()
+        }
+    }
+
+    private func restartEchoServerSharedStateScheduler() {
+        echoServerSharedStateTask?.cancel()
+        echoServerSharedStateTask = nil
+        guard echoServerConfig.isConfigured && echoServerConfig.syncSharedState else { return }
+
+        echoServerSharedStateTask = Task { @MainActor [weak self] in
+            // Brief startup delay so initial UI renders instantaneously
+            try? await Task.sleep(for: .seconds(2))
+            while !Task.isCancelled {
+                guard let self else { return }
+                if self.echoServerConfig.isConfigured && self.echoServerConfig.syncSharedState {
+                    await self.syncSharedStateWithEchoServer(silent: true)
+                }
+                // Periodically pull/push playlists, ratings & editorial every 5 minutes
+                try? await Task.sleep(for: .seconds(300))
+            }
+        }
+    }
+
+    private func persistDeletedPlaylistTombstones() {
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .secondsSince1970
+        if let data = try? enc.encode(deletedPlaylistTombstones),
+           let str = String(data: data, encoding: .utf8) {
+            database.setSetting("deletedPlaylistTombstones", value: str)
+        }
+    }
+
+    private func applyMergedRemotePlaylists(_ remotePlaylists: [EchoServerSharedPlaylist]) {
+        let protectedIDs: Set<UUID> = partyPlaylistID.map { [$0] } ?? []
+        let result = EchoServerPlaylistMerger.merge(
+            localPlaylists: playlists,
+            remotePlaylists: remotePlaylists,
+            localTombstones: deletedPlaylistTombstones,
+            protectedPlaylistIDs: protectedIDs,
+            partyPlaylistName: Self.partyPlaylistName
+        )
+
+        if result.tombstonesChanged {
+            deletedPlaylistTombstones = result.remainingTombstones
+            persistDeletedPlaylistTombstones()
+        }
+
+        guard result.didChange else { return }
+
+        playlists = result.playlists
+        for pl in result.savedPlaylists {
+            database.savePlaylist(pl)
+        }
+        for deletedID in result.deletedPlaylistIDs {
+            database.deletePlaylist(id: deletedID)
+            for i in devices.indices {
+                if devices[i].selectedPlaylistIDs.remove(deletedID) != nil {
+                    database.saveDevice(devices[i])
+                }
+            }
+            if case .playlist(let currentID) = currentDestination, currentID == deletedID {
+                navigate(to: .home)
+            }
+            if focusedPlaylistID == deletedID {
+                setFocusedPlaylist(playlists.first?.id)
+            }
+        }
+        if focusedPlaylistID == nil, let firstID = playlists.first?.id {
+            setFocusedPlaylist(firstID)
+        }
+        recomputeSyncPlan()
+    }
+
+    private func scheduleEchoServerPlaylistSync(playlistID: UUID) {
+        guard echoServerConfig.isConfigured && echoServerConfig.syncSharedState else { return }
+        if let pl = playlists.first(where: { $0.id == playlistID }), isPartyPlaylist(pl) {
+            return
+        }
+        pendingEchoServerPlaylistIDs.insert(playlistID)
+        echoServerPlaylistPushTask?.cancel()
+        echoServerPlaylistPushTask = Task { @MainActor [weak self] in
+            // Short coalesce window so rapid track adds/reorders batch into one ordered POST
+            try? await Task.sleep(for: .milliseconds(350))
+            guard let self, !Task.isCancelled else { return }
+            guard self.echoServerConfig.isConfigured && self.echoServerConfig.syncSharedState else {
+                self.pendingEchoServerPlaylistIDs.removeAll()
+                return
+            }
+
+            let idsToSync = self.pendingEchoServerPlaylistIDs
+            self.pendingEchoServerPlaylistIDs.removeAll()
+            guard !idsToSync.isEmpty else { return }
+
+            var batch: [EchoServerSharedPlaylist] = []
+            for id in idsToSync {
+                if let pl = self.playlists.first(where: { $0.id == id }) {
+                    if !self.isPartyPlaylist(pl) {
+                        batch.append(EchoServerSharedPlaylist(from: pl))
+                    }
+                } else if let deletedAt = self.deletedPlaylistTombstones[id.uuidString] {
+                    batch.append(EchoServerSharedPlaylist(
+                        id: id.uuidString,
+                        name: "",
+                        description: "",
+                        trackIDs: [],
+                        createdAt: deletedAt,
+                        updatedAt: deletedAt,
+                        deleted: true
+                    ))
+                }
+            }
+            guard !batch.isEmpty else { return }
+
+            let cfg = self.echoServerConfig
+            do {
+                let merged = try await self.echoServerClient.syncSharedState(
+                    config: cfg,
+                    payload: EchoServerSharedStatePayload(playlists: batch)
+                )
+                self.lastEchoServerSharedStateSyncAt = Date()
+                self.echoServerError = nil
+                if let remotePlaylists = merged.playlists {
+                    self.applyMergedRemotePlaylists(remotePlaylists)
+                }
+            } catch {
+                self.handleEchoServerSyncError(error, silent: true)
+            }
+        }
+    }
+
+    private func handleEchoServerSyncError(_ error: Error, silent: Bool) {
+        let nsErr = error as NSError
+        let isAuthError = nsErr.domain == "EchoServer" && nsErr.code == 401
+        let message = isAuthError
+            ? "Echo Server rejected Pairing PIN (HTTP 401) — update your 6-digit PIN in Settings → My Echo Server."
+            : error.localizedDescription
+        let hadAuthErrorBefore = echoServerError?.contains("401") == true
+        echoServerError = message
+        if isAuthError {
+            echoServerStatusText = "Authentication failed — update Pairing PIN in Settings"
+        }
+        if !silent {
+            showToast("Shared state sync failed: \(message)", isError: true)
+        } else if isAuthError && !hadAuthErrorBefore {
+            showToast(message, isError: true)
         }
     }
 
@@ -1486,6 +1699,9 @@ final class EchoStore {
             echoServerLibraries = libs
             if let partyEnv { echoServerPartyStatus = partyEnv.status }
             echoServerStatusText = "Connected to \(info.serverName) (\(activeURL)) · \(info.trackCount) tracks · \(libs.count) librar\(libs.count == 1 ? "y" : "ies")"
+            if echoServerConfig.syncSharedState {
+                await syncSharedStateWithEchoServer(silent: true)
+            }
             showToast("Connected to \(info.serverName)")
         } catch {
             echoServerError = error.localizedDescription
@@ -1648,11 +1864,16 @@ final class EchoStore {
 
     func syncSharedStateWithEchoServer(silent: Bool = false) async {
         guard echoServerConfig.isConfigured else { return }
+        guard !isSyncingEchoServerState else { return }
         isSyncingEchoServerState = true
         defer { isSyncingEchoServerState = false }
 
+        let outgoingPlaylists = EchoServerPlaylistMerger.outgoingPayload(
+            syncablePlaylists: syncablePlaylists,
+            localTombstones: deletedPlaylistTombstones
+        )
         let payload = EchoServerSharedStatePayload(
-            playlists: syncablePlaylists.map { EchoServerSharedPlaylist(from: $0) },
+            playlists: outgoingPlaylists,
             trackStats: trackStats.values.map { EchoServerSharedTrackStats(from: $0) },
             albumRatings: albumRatings.values.map { EchoServerSharedAlbumRating(from: $0) },
             podcasts: podcasts.filter { !$0.isSingleEpisodesBucket }.map { EchoServerSharedPodcastFeed(from: $0) },
@@ -1662,6 +1883,12 @@ final class EchoStore {
 
         do {
             let merged = try await echoServerClient.syncSharedState(config: echoServerConfig, payload: payload)
+            lastEchoServerSharedStateSyncAt = Date()
+            echoServerError = nil
+            // Merge back playlists (new, updated & remote deletions) from Echo Server
+            if let remotePlaylists = merged.playlists {
+                applyMergedRemotePlaylists(remotePlaylists)
+            }
             // Merge back track ratings & play counts from Echo Server
             if let remoteStats = merged.trackStats {
                 for remote in remoteStats {
@@ -1722,9 +1949,7 @@ final class EchoStore {
                 showToast("Synced playlists, ratings, podcasts & editorial cache with \(echoServerConfig.serverName)")
             }
         } catch {
-            if !silent {
-                showToast("Shared state sync failed: \(error.localizedDescription)", isError: true)
-            }
+            handleEchoServerSyncError(error, silent: silent)
         }
     }
 
@@ -2352,6 +2577,7 @@ final class EchoStore {
                 playlists[idx].updatedAt = Date()
                 database.savePlaylist(playlists[idx])
                 recomputeSyncPlan()
+                scheduleEchoServerPlaylistSync(playlistID: pl.id)
                 showToast("Removed '\(label)' from '\(pl.name)'")
             } else {
                 addTracks(targetTracks, toPlaylistID: pl.id)
@@ -2511,6 +2737,8 @@ final class EchoStore {
                 recomputeSyncPlan()
                 if isPartyModeEnabled && playlistID == partyPlaylistID {
                     syncPartyPlaylistToPlayerAndServer(autoStartIfIdle: false)
+                } else {
+                    scheduleEchoServerPlaylistSync(playlistID: playlistID)
                 }
                 return true
             }
@@ -2530,6 +2758,8 @@ final class EchoStore {
         recomputeSyncPlan()
         if isPartyModeEnabled && playlistID == partyPlaylistID {
             syncPartyPlaylistToPlayerAndServer(autoStartIfIdle: partyAutoPlayOnRequest)
+        } else {
+            scheduleEchoServerPlaylistSync(playlistID: playlistID)
         }
         showToast("Added \(toInsert.count) track\(toInsert.count == 1 ? "" : "s") to '\(playlists[plIdx].name)'")
         return true
@@ -2547,6 +2777,7 @@ final class EchoStore {
         database.savePlaylist(pl)
         setFocusedPlaylist(pl.id)
         recomputeSyncPlan()
+        scheduleEchoServerPlaylistSync(playlistID: pl.id)
         showToast("Created playlist '\(pl.name)'")
         return pl
     }
@@ -2558,6 +2789,7 @@ final class EchoStore {
             playlists[idx] = updated
             database.savePlaylist(updated)
             recomputeSyncPlan()
+            scheduleEchoServerPlaylistSync(playlistID: updated.id)
         }
     }
 
@@ -2566,8 +2798,13 @@ final class EchoStore {
             showToast("Exit Party Mode before deleting '\(playlist.name)'", isError: true)
             return
         }
+        let shouldSyncDeletion = !isPartyPlaylist(playlist)
         playlists.removeAll { $0.id == playlist.id }
         database.deletePlaylist(id: playlist.id)
+        if shouldSyncDeletion {
+            deletedPlaylistTombstones[playlist.id.uuidString] = max(Date(), playlist.updatedAt.addingTimeInterval(1))
+            persistDeletedPlaylistTombstones()
+        }
         for i in devices.indices {
             if devices[i].selectedPlaylistIDs.remove(playlist.id) != nil {
                 database.saveDevice(devices[i])
@@ -2583,6 +2820,9 @@ final class EchoStore {
             partyPlaylistID = nil
         }
         recomputeSyncPlan()
+        if shouldSyncDeletion {
+            scheduleEchoServerPlaylistSync(playlistID: playlist.id)
+        }
         showToast("Deleted playlist '\(playlist.name)'")
     }
 
@@ -2599,13 +2839,17 @@ final class EchoStore {
         let copy = Playlist(
             name: candidate,
             description: playlist.description,
-            trackIDs: playlist.trackIDs
+            trackIDs: playlist.trackIDs,
+            missingTracks: playlist.missingTracks,
+            spotifyPlaylistID: playlist.spotifyPlaylistID,
+            spotifySourceURL: playlist.spotifySourceURL
         )
         playlists.append(copy)
         database.savePlaylist(copy)
         setFocusedPlaylist(copy.id)
         navigate(to: .playlist(copy.id))
         recomputeSyncPlan()
+        scheduleEchoServerPlaylistSync(playlistID: copy.id)
         showToast("Duplicated '\(playlist.name)' → '\(copy.name)'")
         return copy
     }
@@ -2687,6 +2931,8 @@ final class EchoStore {
         recomputeSyncPlan()
         if isLockedParty {
             syncPartyPlaylistToPlayerAndServer(autoStartIfIdle: partyAutoPlayOnRequest)
+        } else {
+            scheduleEchoServerPlaylistSync(playlistID: playlistID)
         }
         showToast("Added \(toAdd.count) track\(toAdd.count == 1 ? "" : "s") to '\(playlists[idx].name)'")
     }
@@ -2694,12 +2940,17 @@ final class EchoStore {
     func removeTrack(at index: Int, fromPlaylistID playlistID: UUID) {
         guard let idx = playlists.firstIndex(where: { $0.id == playlistID }),
               index >= 0 && index < playlists[idx].trackIDs.count else { return }
-        playlists[idx].trackIDs.remove(at: index)
+        let removedID = playlists[idx].trackIDs.remove(at: index)
+        if Playlist.isMissingTrackID(removedID), !playlists[idx].trackIDs.contains(removedID) {
+            playlists[idx].missingTracks.removeAll { $0.id == removedID }
+        }
         playlists[idx].updatedAt = Date()
         database.savePlaylist(playlists[idx])
         recomputeSyncPlan()
         if isPartyModeEnabled && playlistID == partyPlaylistID {
             syncPartyPlaylistToPlayerAndServer(autoStartIfIdle: false)
+        } else {
+            scheduleEchoServerPlaylistSync(playlistID: playlistID)
         }
     }
 
@@ -2711,11 +2962,570 @@ final class EchoStore {
         recomputeSyncPlan()
         if isPartyModeEnabled && playlistID == partyPlaylistID {
             syncPartyPlaylistToPlayerAndServer(autoStartIfIdle: false)
+        } else {
+            scheduleEchoServerPlaylistSync(playlistID: playlistID)
         }
     }
 
     func tracks(for playlist: Playlist) -> [Track] {
-        playlist.trackIDs.compactMap { tracksByID[$0] }
+        playlist.trackIDs.compactMap { tid in
+            Playlist.isMissingTrackID(tid) ? nil : tracksByID[tid]
+        }
+    }
+
+    // MARK: - Spotify Playlist Import, Missing-Track Retention & Auto Lidarr Search
+
+    func removeMissingTrack(id missingID: String, fromPlaylistID playlistID: UUID) {
+        guard let idx = playlists.firstIndex(where: { $0.id == playlistID }) else { return }
+        playlists[idx].trackIDs.removeAll { $0 == missingID }
+        playlists[idx].missingTracks.removeAll { $0.id == missingID }
+        playlists[idx].updatedAt = Date()
+        database.savePlaylist(playlists[idx])
+        recomputeSyncPlan()
+    }
+
+    func clearMissingTracks(inPlaylistID playlistID: UUID) {
+        guard let idx = playlists.firstIndex(where: { $0.id == playlistID }) else { return }
+        let removedCount = playlists[idx].missingTrackCount
+        guard removedCount > 0 else { return }
+        playlists[idx].trackIDs.removeAll { Playlist.isMissingTrackID($0) }
+        playlists[idx].missingTracks.removeAll()
+        playlists[idx].updatedAt = Date()
+        database.savePlaylist(playlists[idx])
+        recomputeSyncPlan()
+        showToast("Removed \(removedCount) missing track\(removedCount == 1 ? "" : "s") from '\(playlists[idx].name)'")
+    }
+
+    @discardableResult
+    func importSpotifyPlaylist(
+        report: SpotifyPlaylistMatchReport,
+        customName: String? = nil,
+        customDescription: String? = nil,
+        autoSearchLidarr: Bool = false
+    ) -> Playlist {
+        let playlist = report.buildPlaylist(customName: customName, customDescription: customDescription)
+        playlists.append(playlist)
+        database.savePlaylist(playlist)
+        setFocusedPlaylist(playlist.id)
+        navigate(to: .playlist(playlist.id))
+        recomputeSyncPlan()
+        scheduleEchoServerPlaylistSync(playlistID: playlist.id)
+
+        if report.missingCount == 0 {
+            showToast("Imported '\(playlist.name)' — all \(report.matchedCount) tracks matched your library!")
+        } else {
+            showToast("Imported '\(playlist.name)': \(report.matchedCount) matched, \(report.missingCount) missing (retained & muted)")
+            enrichMissingTrackArtwork(forPlaylistID: playlist.id)
+        }
+
+        if autoSearchLidarr && report.missingCount > 0 {
+            if lidarrConfig.isConfigured {
+                autoSearchMissingTracksInLidarr(playlistID: playlist.id, onlyUnsearched: true)
+            } else {
+                showToast("Configure Lidarr URL & API Key in Settings to auto-search missing tracks.", isError: true)
+            }
+        }
+        return playlist
+    }
+
+    /// Re-matches retained missing tracks across all playlists against the current library (in-place order preserved).
+    @discardableResult
+    func resolveMissingTracksAcrossPlaylists(silent: Bool = false) -> Int {
+        var totalResolved = 0
+        var resolvedPlaylistIDs: [UUID] = []
+        for idx in playlists.indices where !playlists[idx].missingTracks.isEmpty {
+            let (updated, count) = SpotifyPlaylistImporter.resolveMissingTracks(in: playlists[idx], against: tracks)
+            if count > 0 {
+                playlists[idx] = updated
+                database.savePlaylist(updated)
+                resolvedPlaylistIDs.append(updated.id)
+                totalResolved += count
+            }
+        }
+        if totalResolved > 0 {
+            recomputeSyncPlan()
+            for id in resolvedPlaylistIDs {
+                scheduleEchoServerPlaylistSync(playlistID: id)
+            }
+            if !silent {
+                showToast("Resolved \(totalResolved) missing track\(totalResolved == 1 ? "" : "s") from your library!")
+            }
+        }
+        return totalResolved
+    }
+
+    func reMatchMissingTracks(forPlaylistID playlistID: UUID) {
+        guard let idx = playlists.firstIndex(where: { $0.id == playlistID }) else { return }
+        let (updated, count) = SpotifyPlaylistImporter.resolveMissingTracks(in: playlists[idx], against: tracks)
+        if count > 0 {
+            playlists[idx] = updated
+            database.savePlaylist(updated)
+            recomputeSyncPlan()
+            scheduleEchoServerPlaylistSync(playlistID: playlistID)
+            let remaining = updated.missingTrackCount
+            showToast("Matched \(count) missing track\(count == 1 ? "" : "s") in '\(updated.name)' (\(remaining) still missing)")
+        } else {
+            let remaining = playlists[idx].missingTrackCount
+            showToast("No new matches in library yet (\(remaining) still missing)")
+        }
+    }
+
+    /// Re-fetches a previously imported Spotify playlist URL to pick up new tracks while retaining existing Lidarr status.
+    func resyncSpotifyPlaylist(_ playlist: Playlist) {
+        guard let source = playlist.spotifySourceURL ?? playlist.spotifyPlaylistID, !source.isEmpty else { return }
+        guard !resyncingSpotifyPlaylistIDs.contains(playlist.id) else { return }
+        resyncingSpotifyPlaylistIDs.insert(playlist.id)
+        let playlistID = playlist.id
+
+        Task {
+            do {
+                let payload = try await spotifyImporter.fetchPlaylist(from: source)
+                await MainActor.run {
+                    self.resyncingSpotifyPlaylistIDs.remove(playlistID)
+                    guard let idx = self.playlists.firstIndex(where: { $0.id == playlistID }) else { return }
+                    let current = self.playlists[idx]
+                    let existingMissingBySpotifyID: [String: MissingPlaylistTrack] = Dictionary(
+                        uniqueKeysWithValues: current.missingTracks.compactMap { m in
+                            guard let sid = m.spotifyTrackID, !sid.isEmpty else { return nil }
+                            return (sid, m)
+                        }
+                    )
+
+                    let matched = SpotifyPlaylistImporter.matchTracks(payload.tracks, against: self.tracks)
+                    let report = SpotifyPlaylistMatchReport(payload: payload, entries: matched)
+                    let rebuilt = report.buildPlaylist(customName: current.name, customDescription: current.description)
+
+                    // Carry over any previously resolved Lidarr status, album title, and cover URL for still-missing tracks
+                    let mergedMissing: [MissingPlaylistTrack] = rebuilt.missingTracks.map { item in
+                        if let sid = item.spotifyTrackID, let prev = existingMissingBySpotifyID[sid] {
+                            var copy = item
+                            copy.album = prev.album ?? item.album
+                            copy.artworkURL = prev.artworkURL ?? item.artworkURL
+                            copy.lidarrStatus = prev.lidarrStatus
+                            copy.lidarrAlbumTitle = prev.lidarrAlbumTitle
+                            copy.lidarrAlbumID = prev.lidarrAlbumID
+                            copy.lidarrStatusDetail = prev.lidarrStatusDetail
+                            copy.lastSearchedAt = prev.lastSearchedAt
+                            return copy
+                        }
+                        return item
+                    }
+
+                    var updated = current
+                    updated.trackIDs = rebuilt.trackIDs
+                    updated.missingTracks = mergedMissing
+                    updated.spotifyPlaylistID = payload.playlistID
+                    updated.spotifySourceURL = payload.sourceURL
+                    updated.updatedAt = Date()
+                    self.playlists[idx] = updated
+                    self.database.savePlaylist(updated)
+                    self.recomputeSyncPlan()
+                    self.scheduleEchoServerPlaylistSync(playlistID: playlistID)
+
+                    self.showToast("Re-synced '\(updated.name)' from Spotify: \(report.matchedCount) matched, \(report.missingCount) missing")
+                    if report.missingCount > 0 {
+                        self.enrichMissingTrackArtwork(forPlaylistID: playlistID)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.resyncingSpotifyPlaylistIDs.remove(playlistID)
+                    self.showToast("Spotify re-sync failed: \(error.localizedDescription)", isError: true)
+                }
+            }
+        }
+    }
+
+    /// Gently fetches dimmed cover art thumbnails for missing Spotify tracks via Spotify's zero-auth oEmbed API.
+    func enrichMissingTrackArtwork(forPlaylistID playlistID: UUID) {
+        guard let pl = playlists.first(where: { $0.id == playlistID }) else { return }
+        let targets = pl.activeMissingTracks.filter { ($0.artworkURL ?? "").isEmpty && !($0.spotifyTrackID ?? "").isEmpty }
+        guard !targets.isEmpty else { return }
+
+        Task {
+            var resolvedByMissingID: [String: String] = [:]
+            for chunkStart in stride(from: 0, to: targets.count, by: 4) {
+                let slice = targets[chunkStart..<min(chunkStart + 4, targets.count)]
+                await withTaskGroup(of: (String, String?).self) { group in
+                    for item in slice {
+                        guard let sid = item.spotifyTrackID else { continue }
+                        let mid = item.id
+                        group.addTask {
+                            let url = await self.spotifyImporter.fetchSpotifyTrackThumbnailURL(spotifyTrackID: sid)
+                            return (mid, url)
+                        }
+                    }
+                    for await (mid, url) in group {
+                        if let url, !url.isEmpty {
+                            resolvedByMissingID[mid] = url
+                        }
+                    }
+                }
+            }
+
+            guard !resolvedByMissingID.isEmpty else { return }
+            await MainActor.run {
+                guard let idx = self.playlists.firstIndex(where: { $0.id == playlistID }) else { return }
+                var changed = false
+                for mIdx in self.playlists[idx].missingTracks.indices {
+                    let mid = self.playlists[idx].missingTracks[mIdx].id
+                    if let url = resolvedByMissingID[mid], (self.playlists[idx].missingTracks[mIdx].artworkURL ?? "").isEmpty {
+                        self.playlists[idx].missingTracks[mIdx].artworkURL = url
+                        changed = true
+                    }
+                }
+                if changed {
+                    self.database.savePlaylist(self.playlists[idx])
+                }
+            }
+        }
+    }
+
+    func stopLidarrMissingTracksSearch() {
+        lidarrMissingSearchTask?.cancel()
+        lidarrMissingSearchTask = nil
+        isSearchingMissingTracksInLidarr = false
+        activeLidarrMissingSearchPlaylistID = nil
+        lidarrMissingSearchProgress = nil
+        showToast("Stopped automatic Lidarr search for missing tracks")
+    }
+
+    /// Automatically resolves parent albums and orders missing tracks in Lidarr (deduplicating shared albums).
+    func autoSearchMissingTracksInLidarr(playlistID: UUID, onlyUnsearched: Bool = true) {
+        guard lidarrConfig.isConfigured else {
+            showToast("Configure your Lidarr Server URL & API Key in Settings first.", isError: true)
+            return
+        }
+        guard let pl = playlists.first(where: { $0.id == playlistID }) else { return }
+        let candidates = pl.activeMissingTracks.filter { item in
+            if !onlyUnsearched { return true }
+            return item.lidarrStatus == .missing || item.lidarrStatus == .failed || item.lidarrStatus == .notFound
+        }
+        guard !candidates.isEmpty else {
+            showToast("All missing tracks in '\(pl.name)' have already been searched in Lidarr.")
+            return
+        }
+
+        lidarrMissingSearchTask?.cancel()
+        isSearchingMissingTracksInLidarr = true
+        activeLidarrMissingSearchPlaylistID = playlistID
+        lidarrMissingSearchProgress = (0, candidates.count, candidates[0].title)
+
+        let cfg = lidarrConfig
+        lidarrMissingSearchTask = Task { [weak self] in
+            guard let self else { return }
+            var orderedAlbumCache: [String: LidarrOrderResult] = [:]
+            var uniqueAlbumsOrdered = 0
+            var tracksCovered = 0
+            var notFoundCount = 0
+            var failedCount = 0
+
+            for (stepIdx, item) in candidates.enumerated() {
+                if Task.isCancelled { break }
+                await MainActor.run {
+                    self.lidarrMissingSearchProgress = (stepIdx, candidates.count, "\(item.artist) — \(item.title)")
+                    self.updateMissingTrackStatus(
+                        playlistID: playlistID,
+                        missingTrackID: item.id,
+                        status: .searching,
+                        detail: "Resolving album & searching Lidarr..."
+                    )
+                }
+
+                let outcome = await self.resolveAndOrderMissingTrackInLidarr(
+                    item: item,
+                    config: cfg,
+                    orderedAlbumCache: &orderedAlbumCache
+                )
+
+                if Task.isCancelled { break }
+
+                await MainActor.run {
+                    switch outcome {
+                    case .ordered(let res, let albumName, let artworkURL, let wasDeduplicated):
+                        tracksCovered += 1
+                        if !wasDeduplicated { uniqueAlbumsOrdered += 1 }
+                        let detail = res.alreadyExisted
+                            ? "Triggered Lidarr search (\(res.albumTitle))"
+                            : "Ordered in Lidarr (\(res.albumTitle))"
+                        self.updateMissingTrackStatus(
+                            playlistID: playlistID,
+                            missingTrackID: item.id,
+                            status: .ordered,
+                            album: albumName ?? res.albumTitle,
+                            artworkURL: artworkURL,
+                            lidarrAlbumTitle: res.albumTitle,
+                            lidarrAlbumID: res.lidarrAlbumID,
+                            detail: detail
+                        )
+                        if !wasDeduplicated {
+                            self.recordLidarrTrackedOrder(
+                                albumTitle: res.albumTitle,
+                                artistName: res.artistName,
+                                lidarrAlbumID: res.lidarrAlbumID
+                            )
+                        }
+                    case .notFound(let albumName, let artworkURL, let reason):
+                        notFoundCount += 1
+                        self.updateMissingTrackStatus(
+                            playlistID: playlistID,
+                            missingTrackID: item.id,
+                            status: .notFound,
+                            album: albumName,
+                            artworkURL: artworkURL,
+                            detail: reason
+                        )
+                    case .failed(let albumName, let artworkURL, let errorMsg):
+                        failedCount += 1
+                        self.updateMissingTrackStatus(
+                            playlistID: playlistID,
+                            missingTrackID: item.id,
+                            status: .failed,
+                            album: albumName,
+                            artworkURL: artworkURL,
+                            detail: errorMsg
+                        )
+                    }
+                    self.lidarrMissingSearchProgress = (stepIdx + 1, candidates.count, "\(item.artist) — \(item.title)")
+                }
+
+                // Polite pacing so Deezer/MusicBrainz/Lidarr aren't flooded
+                try? await Task.sleep(for: .milliseconds(350))
+            }
+
+            let wasCancelled = Task.isCancelled
+            await MainActor.run {
+                self.isSearchingMissingTracksInLidarr = false
+                self.activeLidarrMissingSearchPlaylistID = nil
+                self.lidarrMissingSearchProgress = nil
+                self.lidarrMissingSearchTask = nil
+
+                if !wasCancelled {
+                    var parts: [String] = []
+                    if tracksCovered > 0 {
+                        parts.append("ordered \(uniqueAlbumsOrdered) album\(uniqueAlbumsOrdered == 1 ? "" : "s") covering \(tracksCovered) track\(tracksCovered == 1 ? "" : "s")")
+                    }
+                    if notFoundCount > 0 {
+                        parts.append("\(notFoundCount) not found")
+                    }
+                    if failedCount > 0 {
+                        parts.append("\(failedCount) failed")
+                    }
+                    let summary = parts.isEmpty ? "No tracks ordered" : parts.joined(separator: " · ")
+                    self.showToast("Lidarr auto-search finished: \(summary)", isError: tracksCovered == 0 && (notFoundCount > 0 || failedCount > 0))
+                }
+            }
+
+            if tracksCovered > 0 {
+                try? await Task.sleep(for: .seconds(1.2))
+                await MainActor.run {
+                    self.refreshLidarrQueueAndWanted(silent: true)
+                }
+            }
+        }
+    }
+
+    /// Searches and orders a single missing playlist track in Lidarr.
+    func searchSingleMissingTrackInLidarr(missingTrackID: String, playlistID: UUID) {
+        guard lidarrConfig.isConfigured else {
+            showToast("Configure your Lidarr Server URL & API Key in Settings first.", isError: true)
+            return
+        }
+        guard let pl = playlists.first(where: { $0.id == playlistID }),
+              let item = pl.missingTracks.first(where: { $0.id == missingTrackID }) else { return }
+
+        let cfg = lidarrConfig
+        updateMissingTrackStatus(
+            playlistID: playlistID,
+            missingTrackID: missingTrackID,
+            status: .searching,
+            detail: "Resolving album & searching Lidarr..."
+        )
+
+        Task {
+            var cache: [String: LidarrOrderResult] = [:]
+            let outcome = await self.resolveAndOrderMissingTrackInLidarr(item: item, config: cfg, orderedAlbumCache: &cache)
+            await MainActor.run {
+                switch outcome {
+                case .ordered(let res, let albumName, let artworkURL, _):
+                    let detail = res.alreadyExisted
+                        ? "Triggered Lidarr search (\(res.albumTitle))"
+                        : "Ordered in Lidarr (\(res.albumTitle))"
+                    self.updateMissingTrackStatus(
+                        playlistID: playlistID,
+                        missingTrackID: missingTrackID,
+                        status: .ordered,
+                        album: albumName ?? res.albumTitle,
+                        artworkURL: artworkURL,
+                        lidarrAlbumTitle: res.albumTitle,
+                        lidarrAlbumID: res.lidarrAlbumID,
+                        detail: detail
+                    )
+                    self.recordLidarrTrackedOrder(
+                        albumTitle: res.albumTitle,
+                        artistName: res.artistName,
+                        lidarrAlbumID: res.lidarrAlbumID
+                    )
+                    self.showToast("Lidarr ordered '\(res.albumTitle)' for '\(item.title)'")
+                    self.refreshLidarrQueueAndWanted(silent: true)
+                case .notFound(let albumName, let artworkURL, let reason):
+                    self.updateMissingTrackStatus(
+                        playlistID: playlistID,
+                        missingTrackID: missingTrackID,
+                        status: .notFound,
+                        album: albumName,
+                        artworkURL: artworkURL,
+                        detail: reason
+                    )
+                    self.showToast("Could not find '\(item.title)' in Lidarr — try manual search", isError: true)
+                case .failed(let albumName, let artworkURL, let errorMsg):
+                    self.updateMissingTrackStatus(
+                        playlistID: playlistID,
+                        missingTrackID: missingTrackID,
+                        status: .failed,
+                        album: albumName,
+                        artworkURL: artworkURL,
+                        detail: errorMsg
+                    )
+                    self.showToast("Lidarr search failed: \(errorMsg)", isError: true)
+                }
+            }
+        }
+    }
+
+    private enum MissingTrackLidarrOutcome {
+        case ordered(result: LidarrOrderResult, albumName: String?, artworkURL: String?, wasDeduplicated: Bool)
+        case notFound(albumName: String?, artworkURL: String?, reason: String)
+        case failed(albumName: String?, artworkURL: String?, error: String)
+    }
+
+    private func resolveAndOrderMissingTrackInLidarr(
+        item: MissingPlaylistTrack,
+        config: LidarrConfig,
+        orderedAlbumCache: inout [String: LidarrOrderResult]
+    ) async -> MissingTrackLidarrOutcome {
+        let primaryArtist = ArtistNameParser.artistNames(item.artist).first ?? item.artist
+        var resolvedAlbumTitle = item.album?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var resolvedArtist = primaryArtist
+        var resolvedArtwork = item.artworkURL
+        var resolvedMBID: String? = nil
+
+        // 1. Resolve parent album via Deezer / MusicBrainz if not already known
+        if resolvedAlbumTitle == nil || resolvedAlbumTitle!.isEmpty {
+            if let info = await spotifyImporter.resolveAlbumInfoForMissingTrack(title: item.title, artist: item.artist) {
+                resolvedAlbumTitle = info.albumTitle
+                if !info.artistName.isEmpty { resolvedArtist = info.artistName }
+                if resolvedArtwork == nil || resolvedArtwork!.isEmpty { resolvedArtwork = info.artworkURL }
+                resolvedMBID = info.musicBrainzReleaseGroupID
+            }
+        }
+
+        // Check album deduplication cache before hitting Lidarr again
+        if let albTitle = resolvedAlbumTitle, !albTitle.isEmpty {
+            let cacheKey = "\(SpotifyPlaylistImporter.normalizeForMatching(resolvedArtist))::\(SpotifyPlaylistImporter.normalizeForMatching(albTitle))"
+            if let cached = orderedAlbumCache[cacheKey] {
+                return .ordered(result: cached, albumName: albTitle, artworkURL: resolvedArtwork, wasDeduplicated: true)
+            }
+        }
+
+        // 2. Search Lidarr for the parent album (MBID lookup first if available, then artist + album, then artist + track title)
+        do {
+            var bestCandidate: LidarrAlbumSearchResult? = nil
+
+            if let mbid = resolvedMBID, !mbid.isEmpty,
+               let byID = try? await lidarrClient.lookupAlbumsRaw(term: "lidarr:\(mbid)", config: config),
+               let first = byID.first {
+                bestCandidate = first
+            }
+
+            if bestCandidate == nil, let albTitle = resolvedAlbumTitle, !albTitle.isEmpty {
+                let candidates = try await lidarrClient.searchAlbums(term: "\(resolvedArtist) \(albTitle)", config: config)
+                let targetAlbum = OnlinePopularityService.normalizeTitleForMatching(albTitle)
+                let targetArtist = OnlinePopularityService.normalizeTitleForMatching(resolvedArtist)
+                bestCandidate = candidates.first(where: { c in
+                    let ca = OnlinePopularityService.normalizeTitleForMatching(c.title)
+                    let car = OnlinePopularityService.normalizeTitleForMatching(c.artistName)
+                    let albumOk = !targetAlbum.isEmpty && (ca == targetAlbum || ca.contains(targetAlbum) || targetAlbum.contains(ca))
+                    let artistOk = targetArtist.isEmpty || car.contains(targetArtist) || targetArtist.contains(car)
+                    return albumOk && artistOk
+                }) ?? candidates.first(where: { c in
+                    let car = OnlinePopularityService.normalizeTitleForMatching(c.artistName)
+                    return !targetArtist.isEmpty && (car.contains(targetArtist) || targetArtist.contains(car))
+                })
+            }
+
+            // Fallback: try searching Lidarr directly for "artist trackTitle" (handles singles & title tracks)
+            if bestCandidate == nil {
+                let cleanTitle = SpotifyPlaylistImporter.stripSpotifyTitleSuffixes(item.title)
+                let candidates = try await lidarrClient.searchAlbums(term: "\(resolvedArtist) \(cleanTitle)", config: config)
+                let targetTitle = OnlinePopularityService.normalizeTitleForMatching(cleanTitle)
+                let targetArtist = OnlinePopularityService.normalizeTitleForMatching(resolvedArtist)
+                bestCandidate = candidates.first(where: { c in
+                    let ca = OnlinePopularityService.normalizeTitleForMatching(c.title)
+                    let car = OnlinePopularityService.normalizeTitleForMatching(c.artistName)
+                    let titleOk = !targetTitle.isEmpty && (ca == targetTitle || ca.contains(targetTitle) || targetTitle.contains(ca))
+                    let artistOk = targetArtist.isEmpty || car.contains(targetArtist) || targetArtist.contains(car)
+                    return titleOk && artistOk
+                })
+            }
+
+            guard let best = bestCandidate else {
+                let reason = resolvedAlbumTitle.map { "Album '\($0)' not found in Lidarr" } ?? "Album not found in Lidarr metadata"
+                return .notFound(albumName: resolvedAlbumTitle, artworkURL: resolvedArtwork, reason: reason)
+            }
+
+            // Deduplicate by Lidarr's resolved album identity as well
+            let resolvedKey = "\(SpotifyPlaylistImporter.normalizeForMatching(best.artistName))::\(SpotifyPlaylistImporter.normalizeForMatching(best.title))"
+            if let cached = orderedAlbumCache[resolvedKey] {
+                return .ordered(result: cached, albumName: resolvedAlbumTitle ?? best.title, artworkURL: resolvedArtwork ?? best.coverURL, wasDeduplicated: true)
+            }
+
+            let orderRes = try await lidarrClient.orderAlbum(best, config: config)
+            orderedAlbumCache[resolvedKey] = orderRes
+            if let albTitle = resolvedAlbumTitle, !albTitle.isEmpty {
+                let altKey = "\(SpotifyPlaylistImporter.normalizeForMatching(resolvedArtist))::\(SpotifyPlaylistImporter.normalizeForMatching(albTitle))"
+                orderedAlbumCache[altKey] = orderRes
+            }
+            return .ordered(
+                result: orderRes,
+                albumName: resolvedAlbumTitle ?? orderRes.albumTitle,
+                artworkURL: resolvedArtwork ?? best.coverURL,
+                wasDeduplicated: false
+            )
+        } catch {
+            return .failed(albumName: resolvedAlbumTitle, artworkURL: resolvedArtwork, error: error.localizedDescription)
+        }
+    }
+
+    private func updateMissingTrackStatus(
+        playlistID: UUID,
+        missingTrackID: String,
+        status: MissingTrackLidarrStatus,
+        album: String? = nil,
+        artworkURL: String? = nil,
+        lidarrAlbumTitle: String? = nil,
+        lidarrAlbumID: Int? = nil,
+        detail: String? = nil
+    ) {
+        guard let plIdx = playlists.firstIndex(where: { $0.id == playlistID }),
+              let mIdx = playlists[plIdx].missingTracks.firstIndex(where: { $0.id == missingTrackID }) else { return }
+        playlists[plIdx].missingTracks[mIdx].lidarrStatus = status
+        if let album, !album.isEmpty {
+            playlists[plIdx].missingTracks[mIdx].album = album
+        }
+        if let artworkURL, !artworkURL.isEmpty {
+            playlists[plIdx].missingTracks[mIdx].artworkURL = artworkURL
+        }
+        if let lidarrAlbumTitle {
+            playlists[plIdx].missingTracks[mIdx].lidarrAlbumTitle = lidarrAlbumTitle
+        }
+        if let lidarrAlbumID {
+            playlists[plIdx].missingTracks[mIdx].lidarrAlbumID = lidarrAlbumID
+        }
+        playlists[plIdx].missingTracks[mIdx].lidarrStatusDetail = detail
+        playlists[plIdx].missingTracks[mIdx].lastSearchedAt = Date()
+        playlists[plIdx].updatedAt = Date()
+        database.savePlaylist(playlists[plIdx])
     }
 
     // MARK: - Party Mode (Dynamic "Partymode" Playlist & Random-Port Guest Web Server)
@@ -5791,6 +6601,37 @@ final class EchoStore {
                 let c = $0.artist.localizedCaseInsensitiveCompare($1.artist)
                 if c != .orderedSame { return c == .orderedAscending }
                 return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+            }
+        }
+    }
+
+    var sortedPlaylists: [Playlist] {
+        switch playlistSortOrder {
+        case .recentlyUpdated:
+            return playlists.sorted { a, b in
+                if a.updatedAt != b.updatedAt { return a.updatedAt > b.updatedAt }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+        case .name:
+            return playlists.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        case .mostTracks:
+            return playlists.sorted { a, b in
+                let ac = tracks(for: a).count
+                let bc = tracks(for: b).count
+                if ac != bc { return ac > bc }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+        case .longest:
+            return playlists.sorted { a, b in
+                let ad = tracks(for: a).reduce(0) { $0 + $1.duration }
+                let bd = tracks(for: b).reduce(0) { $0 + $1.duration }
+                if ad != bd { return ad > bd }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+        case .newestCreated:
+            return playlists.sorted { a, b in
+                if a.createdAt != b.createdAt { return a.createdAt > b.createdAt }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
             }
         }
     }

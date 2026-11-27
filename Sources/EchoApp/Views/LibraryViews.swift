@@ -1498,6 +1498,486 @@ struct TracksView: View {
 
 // MARK: - Playlist Detail View
 
+private enum PlaylistDisplayRow: Identifiable {
+    case available(originalIndex: Int, track: Track, playableIndex: Int)
+    case missing(originalIndex: Int, item: MissingPlaylistTrack)
+
+    var id: String {
+        switch self {
+        case .available(let origIdx, let track, _): return "avail:\(origIdx):\(track.id)"
+        case .missing(let origIdx, let item): return "miss:\(origIdx):\(item.id)"
+        }
+    }
+
+    var originalIndex: Int {
+        switch self {
+        case .available(let origIdx, _, _): return origIdx
+        case .missing(let origIdx, _): return origIdx
+        }
+    }
+}
+
+// MARK: - Playlists Grid & Detail
+
+struct PlaylistsView: View {
+    @Environment(EchoStore.self) private var store
+    @State private var showNewPlaylistSheet = false
+    @State private var newPlaylistName = ""
+    @State private var newPlaylistDesc = ""
+    @State private var isEmptyDropTargeted = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(spacing: 12) {
+                    Text("Playlists")
+                        .font(.system(size: 26, weight: .black, design: .rounded))
+                        .foregroundStyle(EchoTheme.textPrimary)
+                    Text("\(store.sortedPlaylists.count)")
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .foregroundStyle(EchoTheme.textMuted)
+                    Spacer()
+
+                    if store.echoServerConfig.isConfigured {
+                        if let err = store.echoServerError {
+                            Button {
+                                store.navigate(to: .settings)
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .font(.system(size: 10.5))
+                                    Text("Server Sync Error")
+                                        .font(.system(size: 11, weight: .bold))
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(EchoTheme.dangerCoral.opacity(0.18))
+                                .foregroundStyle(EchoTheme.dangerCoral)
+                                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                                .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.dangerCoral.opacity(0.45), lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                            .help("\(err) Click to open Settings → My Echo Server.")
+                        } else {
+                            NeoSecondaryButton(
+                                title: store.isSyncingEchoServerState ? "Syncing..." : "Sync Server",
+                                icon: "arrow.triangle.2.circlepath",
+                                disabled: store.isSyncingEchoServerState
+                            ) {
+                                Task { await store.syncSharedStateWithEchoServer() }
+                            }
+                            .help("Sync playlists, ratings, and editorial cache with \(store.echoServerConfig.serverName).")
+                        }
+                    }
+
+                    NeoSecondaryButton(title: "Import Spotify", icon: "waveform.badge.plus") {
+                        store.showSpotifyImportSheet = true
+                    }
+                    .help("Import a public Spotify playlist by URL (⌘⇧I) — retains missing tracks and supports automatic Lidarr search.")
+
+                    NeoPrimaryButton(title: "New Playlist", icon: "plus") {
+                        newPlaylistName = ""
+                        newPlaylistDesc = ""
+                        showNewPlaylistSheet = true
+                    }
+                    .help("Create a new playlist to organize tracks, sync to Echo Server / Apple TV, or export to your player.")
+
+                    NeoPickerDropdown(
+                        prefix: "Sort",
+                        icon: "arrow.up.arrow.down",
+                        selection: Binding(
+                            get: { store.playlistSortOrder },
+                            set: { store.playlistSortOrder = $0 }
+                        ),
+                        options: PlaylistSortOrder.allCases.map { ($0, $0.rawValue) }
+                    )
+                    .fixedSize()
+                    .help("Sort playlists by recently updated, alphabetically, track count, duration, or creation date.")
+                }
+
+                if store.sortedPlaylists.isEmpty {
+                    VStack(spacing: 14) {
+                        Image(systemName: isEmptyDropTargeted ? "tray.and.arrow.down.fill" : "music.note.list")
+                            .font(.system(size: 38, weight: .semibold))
+                            .foregroundStyle(isEmptyDropTargeted ? EchoTheme.neoMint : EchoTheme.neoCyan)
+
+                        Text(isEmptyDropTargeted ? "Drop to Create Playlist" : "No Playlists Yet")
+                            .font(.system(size: 18, weight: .bold, design: .rounded))
+                            .foregroundStyle(EchoTheme.textPrimary)
+
+                        Text("Create a playlist, import one from Spotify, or drag any track, album, or artist here to start a collection.")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(EchoTheme.textSecondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 420)
+
+                        HStack(spacing: 10) {
+                            NeoPrimaryButton(title: "New Playlist", icon: "plus") {
+                                newPlaylistName = ""
+                                newPlaylistDesc = ""
+                                showNewPlaylistSheet = true
+                            }
+                            NeoSecondaryButton(title: "Import Spotify", icon: "waveform.badge.plus") {
+                                store.showSpotifyImportSheet = true
+                            }
+                        }
+                        .padding(.top, 4)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 52)
+                    .padding(.horizontal, 24)
+                    .background(
+                        RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous)
+                            .fill(isEmptyDropTargeted ? EchoTheme.neoMint.opacity(0.10) : EchoTheme.surface)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous)
+                            .strokeBorder(
+                                isEmptyDropTargeted ? EchoTheme.neoMint : EchoTheme.border,
+                                style: StrokeStyle(lineWidth: isEmptyDropTargeted ? 1.5 : 1, dash: isEmptyDropTargeted ? [6, 4] : [])
+                            )
+                    )
+                    .dropDestination(for: String.self) { items, _ in
+                        store.handleDropToCreateNewPlaylist(items: items)
+                    } isTargeted: { targeted in
+                        isEmptyDropTargeted = targeted
+                    }
+                } else {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 168, maximum: 198), spacing: 16)], spacing: 18) {
+                        ForEach(store.sortedPlaylists) { playlist in
+                            PlaylistCardView(playlist: playlist)
+                        }
+                    }
+                }
+            }
+            .padding(26)
+        }
+        .sheet(isPresented: $showNewPlaylistSheet) {
+            NewPlaylistSheet(
+                name: $newPlaylistName,
+                description: $newPlaylistDesc,
+                onCreate: {
+                    let pl = store.createPlaylist(name: newPlaylistName, description: newPlaylistDesc)
+                    store.navigate(to: .playlist(pl.id))
+                },
+                onImportSpotify: {
+                    store.showSpotifyImportSheet = true
+                }
+            )
+        }
+    }
+}
+
+struct PlaylistCardView: View {
+    @Environment(EchoStore.self) private var store
+    let playlist: Playlist
+    @State private var isHovered = false
+    @State private var isDropTargeted = false
+
+    private func subtitleText(for playlistTracks: [Track]) -> String {
+        let trimmedDesc = playlist.description.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedDesc.isEmpty { return trimmedDesc }
+        var seen: Set<String> = []
+        var artists: [String] = []
+        for t in playlistTracks {
+            let name = t.effectiveArtist
+            if !name.isEmpty, seen.insert(name.lowercased()).inserted {
+                artists.append(name)
+                if artists.count == 3 { break }
+            }
+        }
+        if !artists.isEmpty {
+            return artists.joined(separator: ", ")
+        }
+        if playlist.missingTrackCount > 0 {
+            return "\(playlist.missingTrackCount) missing track\(playlist.missingTrackCount == 1 ? "" : "s")"
+        }
+        return "Empty playlist"
+    }
+
+    var body: some View {
+        let playlistTracks = store.tracks(for: playlist)
+        let isParty = store.isPartyPlaylist(playlist)
+        let isSynced = !isParty && store.isPlaylistSelected(playlist)
+        let isFocused = store.focusedPlaylist?.id == playlist.id
+        let heroArtHash = playlistTracks.first?.artworkHash
+
+        let cardFill: Color = isDropTargeted
+            ? EchoTheme.neoMint.opacity(0.14)
+            : (isHovered ? EchoTheme.surfaceElevated : EchoTheme.surface)
+        let cardBorder: Color = isDropTargeted
+            ? EchoTheme.neoMint
+            : (isSynced ? EchoTheme.neoMint.opacity(0.35) : (isFocused ? EchoTheme.neoCyan.opacity(0.35) : EchoTheme.border))
+
+        VStack(alignment: .leading, spacing: 10) {
+            artworkTile(
+                playlistTracks: playlistTracks,
+                isParty: isParty,
+                isSynced: isSynced,
+                isFocused: isFocused
+            )
+            metadataSection(playlistTracks: playlistTracks)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous)
+                .fill(cardFill)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous)
+                .strokeBorder(cardBorder, lineWidth: isDropTargeted ? 1.5 : 1)
+        )
+        .onHover { isHovered = $0 }
+        .onTapGesture { store.navigate(to: .playlist(playlist.id)) }
+        .dropDestination(for: String.self) { items, _ in
+            store.handleDropOntoPlaylist(items: items, playlistID: playlist.id)
+        } isTargeted: { targeted in
+            isDropTargeted = targeted
+        }
+        .draggable(EchoDragPayload.playlist(playlist.id).encode()) {
+            DragPreviewPill(
+                title: playlist.name,
+                subtitle: "Playlist",
+                artworkHash: heroArtHash,
+                artworkCache: store.artworkCache,
+                badge: "\(playlistTracks.count) TRACKS"
+            )
+        }
+        .contextMenu {
+            cardContextMenu(playlistTracks: playlistTracks, isParty: isParty)
+        }
+    }
+
+    @ViewBuilder
+    private func artworkTile(
+        playlistTracks: [Track],
+        isParty: Bool,
+        isSynced: Bool,
+        isFocused: Bool
+    ) -> some View {
+        let isPartyLocked = store.isPartyLockedPlaylist(playlist)
+        let cornerBadge: (String, Color)? = {
+            if isPartyLocked { return ("LIVE PARTY", EchoTheme.neoMagenta) }
+            if playlist.spotifyPlaylistID != nil { return ("SPOTIFY", EchoTheme.neoMint) }
+            if isParty { return ("PARTY", EchoTheme.neoMagenta) }
+            return nil
+        }()
+
+        ZStack(alignment: .bottomTrailing) {
+            PlaylistMosaicArtwork(tracks: playlistTracks, artworkCache: store.artworkCache, cornerRadius: EchoTheme.radiusCard)
+                .aspectRatio(1, contentMode: .fit)
+                .shadow(color: .black.opacity(0.45), radius: 10, y: 4)
+
+            if let (badgeLabel, badgeColor) = cornerBadge {
+                Text(badgeLabel)
+                    .font(.system(size: 8.5, weight: .black, design: .monospaced))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2.5)
+                    .background(Color.black.opacity(0.78))
+                    .foregroundStyle(badgeColor)
+                    .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: EchoTheme.radiusSmall)
+                            .strokeBorder(badgeColor.opacity(0.55), lineWidth: 0.9)
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(6)
+            }
+
+            topRightCornerPills(isParty: isParty, isSynced: isSynced, isFocused: isFocused)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .padding(6)
+
+            if isHovered && !playlistTracks.isEmpty {
+                Button {
+                    if isPartyLocked {
+                        store.playPartyModeTrack(at: 0)
+                    } else {
+                        store.player.play(tracks: playlistTracks, startingAt: 0)
+                    }
+                } label: {
+                    RoundedRectangle(cornerRadius: EchoTheme.radiusControl)
+                        .fill(EchoTheme.neoMint.opacity(0.76))
+                        .frame(width: 28, height: 28)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: EchoTheme.radiusControl)
+                                .strokeBorder(Color.white.opacity(0.28), lineWidth: 0.75)
+                        )
+                        .overlay(Image(systemName: "play.fill").foregroundStyle(.black.opacity(0.9)).font(.system(size: 11, weight: .bold)))
+                        .shadow(color: Color.black.opacity(0.35), radius: 5, y: 2)
+                }
+                .buttonStyle(.plain)
+                .padding(6)
+                .help("Play '\(playlist.name)'")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func topRightCornerPills(isParty: Bool, isSynced: Bool, isFocused: Bool) -> some View {
+        let targetName = store.activeDevice?.name ?? "selected destination"
+        let focusFill: Color = isFocused ? EchoTheme.neoCyan.opacity(0.88) : Color.black.opacity(0.76)
+        let focusFG: Color = isFocused ? Color.black : EchoTheme.textPrimary
+        let focusStroke: Color = isFocused ? EchoTheme.neoCyan : Color.white.opacity(0.24)
+        let syncFill: Color = isSynced ? EchoTheme.neoMint.opacity(0.90) : Color.black.opacity(0.76)
+        let syncFG: Color = isSynced ? Color.black : EchoTheme.textPrimary
+        let syncStroke: Color = isSynced ? EchoTheme.neoMint : Color.white.opacity(0.24)
+
+        HStack(spacing: 4) {
+            if isFocused || isHovered {
+                Button {
+                    store.setFocusedPlaylist(playlist.id)
+                    store.showToast("Set '\(playlist.name)' as quick-add (+) target")
+                } label: {
+                    Image(systemName: isFocused ? "plus.square.fill" : "plus.square")
+                        .font(.system(size: 10.5, weight: .bold))
+                        .frame(width: 22, height: 22)
+                        .background(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).fill(focusFill))
+                        .foregroundStyle(focusFG)
+                        .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(focusStroke, lineWidth: 0.9))
+                }
+                .buttonStyle(.plain)
+                .help(isFocused
+                    ? "'\(playlist.name)' is the active quick-add (+) playlist target."
+                    : "Set '\(playlist.name)' as the quick-add (+) playlist target.")
+            }
+
+            if !isParty && store.activeDevice != nil && (isSynced || isHovered) {
+                Button {
+                    store.togglePlaylistSync(playlist)
+                } label: {
+                    Text("S")
+                        .font(.system(size: 10, weight: .black, design: .monospaced))
+                        .frame(width: 22, height: 22)
+                        .background(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).fill(syncFill))
+                        .foregroundStyle(syncFG)
+                        .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall).strokeBorder(syncStroke, lineWidth: 0.9))
+                }
+                .buttonStyle(.plain)
+                .help(isSynced
+                    ? "Synced to '\(targetName)'. Click to remove '\(playlist.name)'."
+                    : "Include '\(playlist.name)' in '\(targetName)' sync.")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func metadataSection(playlistTracks: [Track]) -> some View {
+        let missingCount = playlist.missingTrackCount
+        let totalDuration = playlistTracks.reduce(0) { $0 + $1.duration }
+
+        VStack(alignment: .leading, spacing: 3) {
+            HoverLinkText(
+                text: playlist.name,
+                font: .system(size: 13.5, weight: .bold),
+                color: EchoTheme.textPrimary,
+                hoverColor: EchoTheme.neoMint,
+                tip: "Open playlist '\(playlist.name)'"
+            ) {
+                store.navigate(to: .playlist(playlist.id))
+            }
+
+            Text(subtitleText(for: playlistTracks))
+                .font(.system(size: 11.5))
+                .foregroundStyle(EchoTheme.textSecondary)
+                .lineLimit(1)
+
+            HStack(spacing: 6) {
+                Text("\(playlistTracks.count) track\(playlistTracks.count == 1 ? "" : "s")")
+                    .font(.system(size: 10))
+                    .foregroundStyle(EchoTheme.textMuted)
+                if missingCount > 0 {
+                    Text("\(missingCount) missing")
+                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(EchoTheme.warningAmber)
+                }
+                Spacer(minLength: 2)
+                if totalDuration > 0 {
+                    Text(Formatters.duration(totalDuration))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(EchoTheme.textMuted)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func cardContextMenu(playlistTracks: [Track], isParty: Bool) -> some View {
+        let missingCount = playlist.missingTrackCount
+        let isPartyLocked = store.isPartyLockedPlaylist(playlist)
+
+        if !playlistTracks.isEmpty {
+            Button("Play Playlist") {
+                if isPartyLocked {
+                    store.playPartyModeTrack(at: 0)
+                } else {
+                    store.player.play(tracks: playlistTracks, startingAt: 0)
+                }
+            }
+            Button("Shuffle Play") {
+                store.player.isShuffled = true
+                store.player.play(tracks: playlistTracks.shuffled(), startingAt: 0)
+            }
+        }
+        Button("Open Playlist") {
+            store.navigate(to: .playlist(playlist.id))
+        }
+        Divider()
+        Button("Set as Focused (+) Target") {
+            store.setFocusedPlaylist(playlist.id)
+            store.showToast("Set '\(playlist.name)' as quick-add (+) target")
+        }
+        if !isParty && !store.devices.isEmpty {
+            Menu("Sync to Destinations") {
+                ForEach(store.devices) { dev in
+                    let onDev = store.isPlaylistSelected(playlist, on: dev)
+                    Button {
+                        store.togglePlaylistSync(playlist, onDeviceID: dev.id)
+                    } label: {
+                        HStack {
+                            Text(dev.name)
+                            if onDev { Image(systemName: "checkmark") }
+                        }
+                    }
+                }
+            }
+        }
+        Divider()
+        if missingCount > 0 {
+            if store.lidarrConfig.isConfigured {
+                Button("Auto-Search Missing in Lidarr (\(missingCount))") {
+                    store.autoSearchMissingTracksInLidarr(playlistID: playlist.id)
+                }
+            }
+            Button("Re-Match Missing Tracks in Library") {
+                store.reMatchMissingTracks(forPlaylistID: playlist.id)
+            }
+        }
+        if playlist.spotifyPlaylistID != nil {
+            Button("Re-Sync from Spotify") {
+                store.resyncSpotifyPlaylist(playlist)
+            }
+        }
+        Button("Duplicate Playlist") {
+            store.duplicatePlaylist(playlist)
+        }
+        Menu("Export Playlist") {
+            Button("Export as .pls (Winamp)...") {
+                store.exportPlaylist(playlist, format: .pls)
+            }
+            Button("Export as .m3u8 (Extended M3U)...") {
+                store.exportPlaylist(playlist, format: .m3u8)
+            }
+        }
+        if !isPartyLocked {
+            Divider()
+            Button("Delete Playlist", role: .destructive) {
+                store.deletePlaylist(playlist)
+            }
+        }
+    }
+}
+
 struct PlaylistDetailView: View {
     @Environment(EchoStore.self) private var store
     let playlistID: UUID
@@ -1508,11 +1988,16 @@ struct PlaylistDetailView: View {
     @State private var isDropTargeted = false
     @State private var tracksSort = TrackTableSortState()
     @State private var selectedRowIndex: Int? = nil
+    @State private var hideMissingTracks = false
     @FocusState private var focusedRowIndex: Int?
 
     var body: some View {
         if let playlist = store.playlists.first(where: { $0.id == playlistID }) {
             let playlistTracks = store.tracks(for: playlist)
+            let missingByID = playlist.missingTracksByID
+            let activeMissing = playlist.activeMissingTracks
+            let missingCount = activeMissing.count
+            let orderedInLidarrCount = activeMissing.filter { $0.lidarrStatus == .ordered }.count
             let isPartyLocked = store.isPartyLockedPlaylist(playlist)
             let partyCurrentTrack = isPartyLocked ? store.player.currentTrack : nil
             let heroArtHash = partyCurrentTrack?.artworkHash ?? playlistTracks.first?.artworkHash
@@ -1521,6 +2006,8 @@ struct PlaylistDetailView: View {
             let totalDuration = playlistTracks.reduce(0) { $0 + $1.duration }
             let totalBytes = playlistTracks.reduce(Int64(0)) { $0 + $1.fileSize }
             let glow = ArtworkImageLoader.shared.dominantColor(forHash: heroArtHash, artworkCache: store.artworkCache)
+            let isResyncingSpotify = store.resyncingSpotifyPlaylistIDs.contains(playlist.id)
+            let isAutoSearchingThisPlaylist = store.isSearchingMissingTracksInLidarr && store.activeLidarrMissingSearchPlaylistID == playlist.id
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
@@ -1558,6 +2045,16 @@ struct PlaylistDetailView: View {
                                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                                         .tracking(1.4)
                                         .foregroundStyle(EchoTheme.neoMint)
+
+                                    if playlist.spotifyPlaylistID != nil {
+                                        Label("SPOTIFY", systemImage: "waveform")
+                                            .font(.system(size: 9, weight: .black, design: .monospaced))
+                                            .padding(.horizontal, 6.5)
+                                            .padding(.vertical, 2.5)
+                                            .background(EchoTheme.neoMint.opacity(0.18))
+                                            .foregroundStyle(EchoTheme.neoMint)
+                                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusSmall))
+                                    }
 
                                     if isPartyLocked {
                                         Button {
@@ -1628,9 +2125,18 @@ struct PlaylistDetailView: View {
                                             .foregroundStyle(EchoTheme.textSecondary)
                                     }
 
-                                    Text("\(playlistTracks.count) tracks · \(Formatters.duration(totalDuration)) · \(Formatters.bytes(totalBytes))")
-                                        .font(.system(size: 12.5))
-                                        .foregroundStyle(EchoTheme.textSecondary)
+                                    HStack(spacing: 6) {
+                                        Text("\(playlistTracks.count) track\(playlistTracks.count == 1 ? "" : "s")")
+                                        if missingCount > 0 {
+                                            Text("· \(missingCount) missing (muted & skipped)")
+                                                .foregroundStyle(EchoTheme.warningAmber.opacity(0.9))
+                                        }
+                                        if !playlistTracks.isEmpty {
+                                            Text("· \(Formatters.duration(totalDuration)) · \(Formatters.bytes(totalBytes))")
+                                        }
+                                    }
+                                    .font(.system(size: 12.5))
+                                    .foregroundStyle(EchoTheme.textSecondary)
 
                                     if let dev = store.activeDevice, !store.isPartyPlaylist(playlist) {
                                         let m3uPath = PathFormatter.relativePlaylistPath(for: playlist, profile: dev)
@@ -1688,6 +2194,32 @@ struct PlaylistDetailView: View {
                                         }
                                         .buttonStyle(.plain)
                                         .help("Pin '\(playlist.name)' as the focused playlist targeted by + buttons on songs.")
+                                    }
+
+                                    if playlist.spotifyPlaylistID != nil {
+                                        Button {
+                                            store.resyncSpotifyPlaylist(playlist)
+                                        } label: {
+                                            HStack(spacing: 5) {
+                                                if isResyncingSpotify {
+                                                    ProgressView().controlSize(.mini)
+                                                } else {
+                                                    Image(systemName: "arrow.triangle.2.circlepath")
+                                                        .font(.system(size: 11, weight: .bold))
+                                                }
+                                                Text(isResyncingSpotify ? "Syncing..." : "Re-Sync Spotify")
+                                                    .font(.system(size: 11.5, weight: .semibold))
+                                            }
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 6.5)
+                                            .background(EchoTheme.neoMint.opacity(0.14))
+                                            .foregroundStyle(EchoTheme.neoMint)
+                                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                                            .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.neoMint.opacity(0.45), lineWidth: 1))
+                                        }
+                                        .buttonStyle(.plain)
+                                        .disabled(isResyncingSpotify)
+                                        .help("Re-fetch this public Spotify playlist to pull newly added songs and re-match against your local library.")
                                     }
 
                                     Button {
@@ -1823,7 +2355,164 @@ struct PlaylistDetailView: View {
                         .padding(26)
                     }
 
-                    if playlistTracks.isEmpty {
+                    // Missing Tracks Retention & Automatic Lidarr Search Banner
+                    if missingCount > 0 {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(spacing: 12) {
+                                Image(systemName: "arrow.down.to.line.compact")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundStyle(isAutoSearchingThisPlaylist ? EchoTheme.neoCyan : EchoTheme.warningAmber)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 8) {
+                                        Text("\(missingCount) Missing Track\(missingCount == 1 ? "" : "s") Retained")
+                                            .font(.system(size: 13, weight: .bold))
+                                            .foregroundStyle(EchoTheme.textPrimary)
+                                        if orderedInLidarrCount > 0 {
+                                            Text("\(orderedInLidarrCount) ORDERED IN LIDARR")
+                                                .font(.system(size: 9, weight: .black, design: .monospaced))
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(EchoTheme.neoCyan.opacity(0.18))
+                                                .foregroundStyle(EchoTheme.neoCyan)
+                                                .clipShape(RoundedRectangle(cornerRadius: 3))
+                                        }
+                                    }
+                                    Text("Shown muted in original playlist order and automatically skipped during playback, export & sync. Tracks light up automatically once added to your library.")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(EchoTheme.textSecondary)
+                                }
+
+                                Spacer(minLength: 10)
+
+                                HStack(spacing: 7) {
+                                    if isAutoSearchingThisPlaylist {
+                                        Button {
+                                            store.stopLidarrMissingTracksSearch()
+                                        } label: {
+                                            HStack(spacing: 5) {
+                                                Image(systemName: "stop.fill")
+                                                    .font(.system(size: 9.5))
+                                                Text("Stop")
+                                                    .font(.system(size: 11.5, weight: .bold))
+                                            }
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 6)
+                                            .background(EchoTheme.dangerCoral.opacity(0.18))
+                                            .foregroundStyle(EchoTheme.dangerCoral)
+                                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                                            .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.dangerCoral.opacity(0.45), lineWidth: 1))
+                                        }
+                                        .buttonStyle(.plain)
+                                    } else if store.lidarrConfig.isConfigured {
+                                        let unsearchedCount = activeMissing.filter { $0.lidarrStatus != .ordered }.count
+                                        NeoPrimaryButton(
+                                            title: unsearchedCount > 0
+                                                ? "Auto-Search Missing in Lidarr (\(unsearchedCount))"
+                                                : "Re-Search All in Lidarr (\(missingCount))",
+                                            icon: "arrow.down.to.line.compact",
+                                            disabled: store.isSearchingMissingTracksInLidarr
+                                        ) {
+                                            store.autoSearchMissingTracksInLidarr(
+                                                playlistID: playlist.id,
+                                                onlyUnsearched: unsearchedCount > 0
+                                            )
+                                        }
+                                        .help("Automatically resolve parent albums and order missing tracks in Lidarr (shared albums are ordered once).")
+                                    } else {
+                                        Button {
+                                            store.navigate(to: .settings)
+                                        } label: {
+                                            HStack(spacing: 5) {
+                                                Image(systemName: "gearshape")
+                                                Text("Configure Lidarr")
+                                            }
+                                            .font(.system(size: 11.5, weight: .semibold))
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 6)
+                                            .background(EchoTheme.surfaceElevated)
+                                            .foregroundStyle(EchoTheme.neoCyan)
+                                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                                            .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.neoCyan.opacity(0.45), lineWidth: 1))
+                                        }
+                                        .buttonStyle(.plain)
+                                        .help("Configure Lidarr URL and API Key in Settings to automatically search & download missing tracks.")
+                                    }
+
+                                    Button {
+                                        store.reMatchMissingTracks(forPlaylistID: playlist.id)
+                                    } label: {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "magnifyingglass")
+                                                .font(.system(size: 10.5, weight: .bold))
+                                            Text("Re-Match")
+                                                .font(.system(size: 11.5, weight: .semibold))
+                                        }
+                                        .padding(.horizontal, 9)
+                                        .padding(.vertical, 6)
+                                        .background(EchoTheme.surfaceElevated)
+                                        .foregroundStyle(EchoTheme.textPrimary)
+                                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                                        .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.border, lineWidth: 1))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Re-check your indexed library right now to resolve newly downloaded missing tracks.")
+
+                                    Button {
+                                        hideMissingTracks.toggle()
+                                    } label: {
+                                        Image(systemName: hideMissingTracks ? "eye" : "eye.slash")
+                                            .font(.system(size: 11.5, weight: .semibold))
+                                            .frame(width: 28, height: 28)
+                                            .background(EchoTheme.surfaceElevated)
+                                            .foregroundStyle(hideMissingTracks ? EchoTheme.neoCyan : EchoTheme.textSecondary)
+                                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                                            .overlay(RoundedRectangle(cornerRadius: EchoTheme.radiusControl).strokeBorder(EchoTheme.border, lineWidth: 1))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help(hideMissingTracks ? "Show muted missing tracks in playlist" : "Temporarily hide muted missing tracks from view")
+
+                                    Button(role: .destructive) {
+                                        store.clearMissingTracks(inPlaylistID: playlist.id)
+                                    } label: {
+                                        Image(systemName: "trash")
+                                            .font(.system(size: 11))
+                                            .frame(width: 28, height: 28)
+                                            .background(EchoTheme.dangerCoral.opacity(0.14))
+                                            .foregroundStyle(EchoTheme.dangerCoral)
+                                            .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Remove all retained missing tracks from this playlist.")
+                                }
+                            }
+
+                            if isAutoSearchingThisPlaylist, let prog = store.lidarrMissingSearchProgress {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    HStack(spacing: 8) {
+                                        ProgressView().controlSize(.mini)
+                                        Text("Searching Lidarr (\(prog.done)/\(max(1, prog.total))): \(prog.currentTrack)")
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundStyle(EchoTheme.neoCyan)
+                                            .lineLimit(1)
+                                        Spacer()
+                                    }
+                                    ProgressView(value: Double(prog.done), total: Double(max(1, prog.total)))
+                                        .tint(EchoTheme.neoCyan)
+                                }
+                            }
+                        }
+                        .padding(14)
+                        .background(EchoTheme.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: EchoTheme.radiusCard, style: .continuous)
+                                .strokeBorder(isAutoSearchingThisPlaylist ? EchoTheme.neoCyan.opacity(0.45) : EchoTheme.warningAmber.opacity(0.32), lineWidth: 1)
+                        )
+                        .padding(.horizontal, 26)
+                    }
+
+                    if playlistTracks.isEmpty && missingCount == 0 {
                         VStack(spacing: 10) {
                             Image(systemName: isDropTargeted ? "tray.and.arrow.down.fill" : "music.note.list")
                                 .font(.system(size: 36))
@@ -1848,59 +2537,109 @@ struct PlaylistDetailView: View {
                         .padding(.horizontal, 26)
                     } else {
                         let isCustomOrder = tracksSort.column == .index && tracksSort.ascending
-                        let indexedSource: [(originalIndex: Int, track: Track)] = playlist.trackIDs.enumerated().compactMap { offset, tid in
-                            guard let t = store.tracksByID[tid] else { return nil }
-                            return (offset, t)
-                        }
-                        let displayedEntries: [(originalIndex: Int, track: Track)] = {
-                            if isCustomOrder { return indexedSource }
-                            let sorted = store.sortTracks(indexedSource.map(\.track), by: tracksSort)
-                            var buckets: [String: [Int]] = [:]
-                            for entry in indexedSource {
-                                buckets[entry.track.id, default: []].append(entry.originalIndex)
-                            }
-                            var cursor: [String: Int] = [:]
-                            return sorted.compactMap { track in
-                                let pos = cursor[track.id, default: 0]
-                                guard let indices = buckets[track.id], pos < indices.count else { return nil }
-                                cursor[track.id] = pos + 1
-                                return (indices[pos], track)
+                        let builtRows: (rows: [PlaylistDisplayRow], playableTracks: [Track]) = {
+                            if isCustomOrder {
+                                var rows: [PlaylistDisplayRow] = []
+                                var playable: [Track] = []
+                                for (offset, tid) in playlist.trackIDs.enumerated() {
+                                    if Playlist.isMissingTrackID(tid) {
+                                        if !hideMissingTracks, let m = missingByID[tid] {
+                                            rows.append(.missing(originalIndex: offset, item: m))
+                                        }
+                                    } else if let t = store.tracksByID[tid] {
+                                        let pIdx = playable.count
+                                        playable.append(t)
+                                        rows.append(.available(originalIndex: offset, track: t, playableIndex: pIdx))
+                                    }
+                                }
+                                return (rows, playable)
+                            } else {
+                                let indexedAvail: [(originalIndex: Int, track: Track)] = playlist.trackIDs.enumerated().compactMap { offset, tid in
+                                    guard !Playlist.isMissingTrackID(tid), let t = store.tracksByID[tid] else { return nil }
+                                    return (offset, t)
+                                }
+                                let sorted = store.sortTracks(indexedAvail.map(\.track), by: tracksSort)
+                                var buckets: [String: [Int]] = [:]
+                                for entry in indexedAvail {
+                                    buckets[entry.track.id, default: []].append(entry.originalIndex)
+                                }
+                                var cursor: [String: Int] = [:]
+                                var rows: [PlaylistDisplayRow] = []
+                                var playable: [Track] = []
+                                for track in sorted {
+                                    let pos = cursor[track.id, default: 0]
+                                    guard let indices = buckets[track.id], pos < indices.count else { continue }
+                                    cursor[track.id] = pos + 1
+                                    let pIdx = playable.count
+                                    playable.append(track)
+                                    rows.append(.available(originalIndex: indices[pos], track: track, playableIndex: pIdx))
+                                }
+                                if !hideMissingTracks {
+                                    for (offset, tid) in playlist.trackIDs.enumerated() where Playlist.isMissingTrackID(tid) {
+                                        if let m = missingByID[tid] {
+                                            rows.append(.missing(originalIndex: offset, item: m))
+                                        }
+                                    }
+                                }
+                                return (rows, playable)
                             }
                         }()
-                        let displayedTracks = displayedEntries.map(\.track)
+                        let displayedRows = builtRows.rows
+                        let displayedPlayableTracks = builtRows.playableTracks
 
                         VStack(spacing: 2) {
                             SortableTrackTableHeader(showAlbum: true, isPlaylist: true, sortState: $tracksSort)
                             Divider().overlay(EchoTheme.border).padding(.bottom, 4)
 
                             let isPartymodePlaylist = isPartyLocked || playlist.name.caseInsensitiveCompare(EchoStore.partyPlaylistName) == .orderedSame
-                            ForEach(Array(displayedEntries.enumerated()), id: \.offset) { idx, entry in
-                                TrackRowView(
-                                    track: entry.track,
-                                    index: idx,
-                                    showAlbumColumn: true,
-                                    playlistContext: (playlist.id, entry.originalIndex),
-                                    allowPlaylistReorder: isCustomOrder,
-                                    isSelected: selectedRowIndex == idx || focusedRowIndex == idx,
-                                    partyRequester: isPartymodePlaylist ? store.partyRequesterName(for: entry.track.id) : nil,
-                                    partyVoiceIntroDuration: isPartymodePlaylist ? store.partyVoiceIntrosByTrackID[entry.track.id]?.duration : nil,
-                                    onRemovePartyVoiceIntro: isPartymodePlaylist ? {
-                                        store.deletePartyVoiceIntro(trackID: entry.track.id, fromHost: true)
-                                    } : nil,
-                                    onSelect: {
-                                        selectedRowIndex = idx
-                                        focusedRowIndex = idx
+                            ForEach(Array(displayedRows.enumerated()), id: \.element.id) { idx, row in
+                                switch row {
+                                case .available(let origIdx, let track, let playableIdx):
+                                    TrackRowView(
+                                        track: track,
+                                        index: idx,
+                                        showAlbumColumn: true,
+                                        playlistContext: (playlist.id, origIdx),
+                                        allowPlaylistReorder: isCustomOrder,
+                                        isSelected: selectedRowIndex == idx || focusedRowIndex == idx,
+                                        partyRequester: isPartymodePlaylist ? store.partyRequesterName(for: track.id) : nil,
+                                        partyVoiceIntroDuration: isPartymodePlaylist ? store.partyVoiceIntrosByTrackID[track.id]?.duration : nil,
+                                        onRemovePartyVoiceIntro: isPartymodePlaylist ? {
+                                            store.deletePartyVoiceIntro(trackID: track.id, fromHost: true)
+                                        } : nil,
+                                        onSelect: {
+                                            selectedRowIndex = idx
+                                            focusedRowIndex = idx
+                                        }
+                                    ) {
+                                        if store.isPartyLockedPlaylist(playlist) && isCustomOrder {
+                                            store.playPartyModeTrack(at: playableIdx)
+                                        } else {
+                                            store.player.play(tracks: displayedPlayableTracks, startingAt: playableIdx)
+                                        }
                                     }
-                                ) {
-                                    if store.isPartyLockedPlaylist(playlist) && isCustomOrder {
-                                        store.playPartyModeTrack(at: idx)
-                                    } else {
-                                        store.player.play(tracks: displayedTracks, startingAt: idx)
-                                    }
+                                    .focusable()
+                                    .focusEffectDisabled()
+                                    .focused($focusedRowIndex, equals: idx)
+
+                                case .missing(let origIdx, let missing):
+                                    MissingPlaylistTrackRowView(
+                                        missing: missing,
+                                        index: idx,
+                                        playlistID: playlist.id,
+                                        originalIndex: origIdx,
+                                        showAlbumColumn: true,
+                                        allowPlaylistReorder: isCustomOrder,
+                                        isSelected: selectedRowIndex == idx || focusedRowIndex == idx,
+                                        onSelect: {
+                                            selectedRowIndex = idx
+                                            focusedRowIndex = idx
+                                        }
+                                    )
+                                    .focusable()
+                                    .focusEffectDisabled()
+                                    .focused($focusedRowIndex, equals: idx)
                                 }
-                                .focusable()
-                                .focusEffectDisabled()
-                                .focused($focusedRowIndex, equals: idx)
                             }
                         }
                         .padding(.horizontal, 26)
@@ -1911,39 +2650,42 @@ struct PlaylistDetailView: View {
                                 switch event.keyCode {
                                 case 51, 117: // Delete (Backspace) or Forward Delete
                                     guard let targetIdx = selectedRowIndex ?? focusedRowIndex,
-                                          targetIdx >= 0 && targetIdx < displayedEntries.count else {
+                                          targetIdx >= 0 && targetIdx < displayedRows.count else {
                                         return false
                                     }
-                                    let origIdx = displayedEntries[targetIdx].originalIndex
+                                    let origIdx = displayedRows[targetIdx].originalIndex
                                     store.removeTrack(at: origIdx, fromPlaylistID: playlist.id)
-                                    let remaining = displayedEntries.count - 1
+                                    let remaining = displayedRows.count - 1
                                     let nextSel: Int? = remaining > 0 ? min(targetIdx, remaining - 1) : nil
                                     selectedRowIndex = nextSel
                                     focusedRowIndex = nextSel
                                     return true
                                 case 125: // Down arrow
-                                    guard !displayedEntries.isEmpty, let cur = selectedRowIndex ?? focusedRowIndex else { return false }
-                                    let next = min(displayedEntries.count - 1, cur + 1)
+                                    guard !displayedRows.isEmpty, let cur = selectedRowIndex ?? focusedRowIndex else { return false }
+                                    let next = min(displayedRows.count - 1, cur + 1)
                                     selectedRowIndex = next
                                     focusedRowIndex = next
                                     return true
                                 case 126: // Up arrow
-                                    guard !displayedEntries.isEmpty, let cur = selectedRowIndex ?? focusedRowIndex else { return false }
+                                    guard !displayedRows.isEmpty, let cur = selectedRowIndex ?? focusedRowIndex else { return false }
                                     let prev = max(0, cur - 1)
                                     selectedRowIndex = prev
                                     focusedRowIndex = prev
                                     return true
-                                case 36, 76: // Return / Enter
+                                case 36, 76: // Return / Enter — skip/ignore missing tracks!
                                     guard let targetIdx = selectedRowIndex ?? focusedRowIndex,
-                                          targetIdx >= 0 && targetIdx < displayedEntries.count else {
+                                          targetIdx >= 0 && targetIdx < displayedRows.count else {
                                         return false
                                     }
-                                    if store.isPartyLockedPlaylist(playlist) && isCustomOrder {
-                                        store.playPartyModeTrack(at: targetIdx)
-                                    } else {
-                                        store.player.play(tracks: displayedTracks, startingAt: targetIdx)
+                                    if case .available(_, _, let playableIdx) = displayedRows[targetIdx] {
+                                        if store.isPartyLockedPlaylist(playlist) && isCustomOrder {
+                                            store.playPartyModeTrack(at: playableIdx)
+                                        } else {
+                                            store.player.play(tracks: displayedPlayableTracks, startingAt: playableIdx)
+                                        }
+                                        return true
                                     }
-                                    return true
+                                    return false
                                 case 53: // Escape
                                     guard selectedRowIndex != nil || focusedRowIndex != nil else { return false }
                                     selectedRowIndex = nil
@@ -1978,6 +2720,337 @@ struct PlaylistDetailView: View {
             }
         } else {
             ContentUnavailableView("Playlist Not Found", systemImage: "music.note.list")
+        }
+    }
+}
+
+/// Muted/dimmed row for missing tracks retained in an imported playlist — visually muted, skipped on playback & sync,
+/// with one-click individual Lidarr search/order and automatic live upgrade once downloaded.
+private struct MissingPlaylistTrackRowView: View {
+    @Environment(EchoStore.self) private var store
+    let missing: MissingPlaylistTrack
+    let index: Int
+    let playlistID: UUID
+    let originalIndex: Int
+    var showAlbumColumn: Bool = true
+    var allowPlaylistReorder: Bool = true
+    var isSelected: Bool = false
+    var onSelect: (() -> Void)? = nil
+
+    @State private var isHovered = false
+    @State private var isReorderDropTargeted = false
+
+    private var dragPayloadString: String {
+        EchoDragPayload.reorder(playlistID: playlistID, sourceIndex: originalIndex).encode()
+    }
+
+    var body: some View {
+        rowContent
+            .draggable(allowPlaylistReorder ? dragPayloadString : "") {
+                HStack(spacing: 8) {
+                    Image(systemName: "music.note")
+                        .font(.system(size: 11))
+                        .foregroundStyle(EchoTheme.textMuted)
+                    Text("\(missing.title) — \(missing.artist)")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(EchoTheme.textSecondary)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(EchoTheme.surfaceElevated)
+                .clipShape(RoundedRectangle(cornerRadius: EchoTheme.radiusControl))
+            }
+            .dropDestination(for: String.self) { items, _ in
+                guard allowPlaylistReorder else { return false }
+                return store.handlePlaylistReorderDrop(items: items, playlistID: playlistID, targetIndex: originalIndex)
+            } isTargeted: { targeted in
+                if allowPlaylistReorder {
+                    isReorderDropTargeted = targeted
+                }
+            }
+    }
+
+    private var rowContent: some View {
+        HStack(spacing: 12) {
+            // Track index (always muted; never shows play button because missing tracks are skipped)
+            Text("\(index + 1)")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(EchoTheme.textMuted.opacity(0.45))
+                .frame(width: 26)
+
+            // Dimmed artwork thumbnail + muted title & artist (matching Spotify unavailable track aesthetic)
+            HStack(spacing: 10) {
+                dimmedThumbnail
+                    .frame(width: 36, height: 36)
+
+                VStack(alignment: .leading, spacing: 2.5) {
+                    Text(missing.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(EchoTheme.textSecondary.opacity(0.55))
+                        .lineLimit(1)
+
+                    Text(missing.artist.isEmpty ? "Unknown Artist" : missing.artist)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(EchoTheme.textMuted.opacity(0.55))
+                        .lineLimit(1)
+                }
+            }
+            .frame(minWidth: 180, maxWidth: .infinity, alignment: .leading)
+
+            if showAlbumColumn {
+                Text(missing.album ?? "—")
+                    .font(.system(size: 12))
+                    .foregroundStyle(EchoTheme.textMuted.opacity(0.45))
+                    .lineLimit(1)
+                    .frame(width: 150, alignment: .leading)
+            }
+
+            // Aligned span covering Plays(44) + Pop(50) + Rating(68) + Format(86) + 3×12pt spacings = 284pt
+            HStack(spacing: 6) {
+                Spacer(minLength: 0)
+                statusPill
+            }
+            .frame(width: 284, alignment: .trailing)
+
+            // Reorder drag handle (aligned with TrackRowView's 30pt column)
+            HStack(spacing: 4) {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(
+                        allowPlaylistReorder
+                            ? (isHovered ? EchoTheme.textMuted.opacity(0.75) : EchoTheme.textMuted.opacity(0.25))
+                            : EchoTheme.textMuted.opacity(0.14)
+                    )
+            }
+            .frame(width: 30)
+
+            // Individual Lidarr Search button (aligned with TrackRowView's 30pt Sync column)
+            Button {
+                if store.lidarrConfig.isConfigured {
+                    store.searchSingleMissingTrackInLidarr(missingTrackID: missing.id, playlistID: playlistID)
+                } else {
+                    store.navigate(to: .settings)
+                }
+            } label: {
+                Group {
+                    if missing.lidarrStatus == .searching {
+                        ProgressView()
+                            .controlSize(.mini)
+                    } else {
+                        Image(systemName: missing.lidarrStatus == .ordered ? "checkmark" : "arrow.down.to.line.compact")
+                            .font(.system(size: 10.5, weight: .bold))
+                    }
+                }
+                .frame(width: 24, height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: EchoTheme.radiusSmall)
+                        .fill(
+                            missing.lidarrStatus == .ordered
+                                ? EchoTheme.neoCyan.opacity(0.18)
+                                : (isHovered ? EchoTheme.neoMint.opacity(0.18) : EchoTheme.surfaceElevated.opacity(0.30))
+                        )
+                )
+                .foregroundStyle(
+                    missing.lidarrStatus == .ordered
+                        ? EchoTheme.neoCyan
+                        : (isHovered ? EchoTheme.neoMint : EchoTheme.textMuted.opacity(0.45))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: EchoTheme.radiusSmall)
+                        .strokeBorder(
+                            missing.lidarrStatus == .ordered
+                                ? EchoTheme.neoCyan.opacity(0.5)
+                                : (isHovered ? EchoTheme.neoMint.opacity(0.55) : EchoTheme.border.opacity(0.6)),
+                            lineWidth: 0.85
+                        )
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(missing.lidarrStatus == .searching)
+            .frame(width: 30)
+            .help(lidarrButtonTooltip)
+
+            // Muted duration (aligned with TrackRowView's 44pt column)
+            Text(missing.duration > 0 ? Formatters.duration(missing.duration) : "—")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(EchoTheme.textMuted.opacity(0.45))
+                .frame(width: 44, alignment: .trailing)
+
+            // Quick actions menu (aligned with TrackRowView's 24pt column)
+            Menu {
+                missingTrackMenuItems
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 12))
+                    .foregroundStyle(isHovered ? EchoTheme.textSecondary : EchoTheme.textMuted.opacity(0.45))
+                    .frame(width: 24, height: 24)
+            }
+            .menuStyle(.borderlessButton)
+            .frame(width: 24)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                .fill(
+                    isSelected
+                        ? EchoTheme.neoCyan.opacity(0.10)
+                        : (isHovered ? EchoTheme.surfaceElevated.opacity(0.35) : Color.clear)
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: EchoTheme.radiusControl, style: .continuous)
+                .strokeBorder(isSelected ? EchoTheme.neoCyan.opacity(0.4) : Color.clear, lineWidth: 1)
+                .allowsHitTesting(false)
+        )
+        .overlay(alignment: .top) {
+            if isReorderDropTargeted {
+                Rectangle()
+                    .fill(EchoTheme.neoMint)
+                    .frame(height: 2.5)
+                    .padding(.horizontal, 8)
+            }
+        }
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+        .onTapGesture(count: 1) {
+            onSelect?()
+        }
+        .contextMenu {
+            missingTrackMenuItems
+        }
+        .help("Missing from local library (skipped during playback & sync).\(missing.lidarrStatusDetail.map { " \($0)" } ?? "")")
+    }
+
+    @ViewBuilder
+    private var dimmedThumbnail: some View {
+        let r = EchoTheme.radiusSmall
+        Group {
+            if let artStr = missing.artworkURL, let url = URL(string: artStr) {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let img):
+                        img
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .saturation(0.30)
+                            .opacity(0.38)
+                    default:
+                        mutedPlaceholderArt
+                    }
+                }
+            } else {
+                mutedPlaceholderArt
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: r, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: r, style: .continuous)
+                .strokeBorder(EchoTheme.border.opacity(0.55), lineWidth: 1)
+        )
+    }
+
+    private var mutedPlaceholderArt: some View {
+        ZStack {
+            EchoTheme.surfaceElevated.opacity(0.42)
+            Image(systemName: "music.note")
+                .font(.system(size: 13, weight: .light))
+                .foregroundStyle(EchoTheme.textMuted.opacity(0.38))
+        }
+    }
+
+    @ViewBuilder
+    private var statusPill: some View {
+        switch missing.lidarrStatus {
+        case .missing:
+            Text("MISSING")
+                .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.white.opacity(0.04))
+                .foregroundStyle(EchoTheme.textMuted.opacity(0.55))
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+        case .searching:
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.mini)
+                Text("SEARCHING LIDARR")
+                    .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(EchoTheme.neoCyan.opacity(0.14))
+            .foregroundStyle(EchoTheme.neoCyan)
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+        case .ordered:
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.system(size: 8.5))
+                Text("LIDARR ORDERED")
+                    .font(.system(size: 8.5, weight: .black, design: .monospaced))
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(EchoTheme.neoCyan.opacity(0.16))
+            .foregroundStyle(EchoTheme.neoCyan)
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+            .help(missing.lidarrStatusDetail ?? "Ordered in Lidarr — waiting for download & library re-index.")
+        case .notFound:
+            Text("NOT IN LIDARR")
+                .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(EchoTheme.warningAmber.opacity(0.14))
+                .foregroundStyle(EchoTheme.warningAmber.opacity(0.85))
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+                .help(missing.lidarrStatusDetail ?? "Could not match automatically — use manual Lidarr search from the menu.")
+        case .failed:
+            Text("LIDARR RETRY")
+                .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(EchoTheme.dangerCoral.opacity(0.14))
+                .foregroundStyle(EchoTheme.dangerCoral.opacity(0.9))
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+                .help(missing.lidarrStatusDetail ?? "Lidarr search failed — click to retry.")
+        }
+    }
+
+    private var lidarrButtonTooltip: String {
+        if !store.lidarrConfig.isConfigured {
+            return "Configure Lidarr in Settings to search & download this missing track."
+        }
+        switch missing.lidarrStatus {
+        case .ordered:
+            return "Already ordered in Lidarr (\(missing.lidarrAlbumTitle ?? "parent album")). Click to re-trigger search."
+        case .searching:
+            return "Searching Lidarr..."
+        default:
+            return "Automatically resolve parent album and search/order '\(missing.title)' by \(missing.artist) in Lidarr."
+        }
+    }
+
+    @ViewBuilder
+    private var missingTrackMenuItems: some View {
+        if store.lidarrConfig.isConfigured {
+            Button("Auto-Search & Order in Lidarr") {
+                store.searchSingleMissingTrackInLidarr(missingTrackID: missing.id, playlistID: playlistID)
+            }
+        }
+        if store.lidarrConfig.isEnabled {
+            Button("Open Manual Lidarr Search...") {
+                let query = missing.album.map { "\(missing.artist) \($0)" } ?? "\(missing.artist) \(missing.title)"
+                store.openLidarrSearch(query: query, mode: .tracks)
+            }
+        }
+        Button("Copy Artist & Title") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString("\(missing.artist) - \(missing.title)", forType: .string)
+            store.showToast("Copied '\(missing.artist) - \(missing.title)'")
+        }
+        Divider()
+        Button("Remove Missing Track", role: .destructive) {
+            store.removeMissingTrack(id: missing.id, fromPlaylistID: playlistID)
         }
     }
 }

@@ -31,6 +31,11 @@ struct EchoApp: App {
                 }
                 .keyboardShortcut("r", modifiers: [.command])
 
+                Button("Import Spotify Playlist...") {
+                    store.showSpotifyImportSheet = true
+                }
+                .keyboardShortcut("i", modifiers: [.command, .shift])
+
                 Divider()
 
                 Button("Add Player / SD Card Target...") {
